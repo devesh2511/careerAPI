@@ -10,7 +10,9 @@ function cookieOptions() {
     httpOnly: true,
     // Secure cookies need HTTPS; local dev runs on plain http.
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    // The frontend is served from another origin, so in production the cookie
+    // must be sent on cross-site fetches (SameSite=None requires Secure).
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     path: '/',
     maxAge: LIFETIME_DAYS * 24 * 3600e3,
   };
