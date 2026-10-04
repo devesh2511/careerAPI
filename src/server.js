@@ -39,10 +39,15 @@ app.use((err, _req, res, _next) => {
   res.status(500).json(new ApiError(500, 'server_error', 'Something went wrong. Please try again.'));
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`career-api listening on http://localhost:${PORT}`);
-});
+// On Vercel the exported app runs as a serverless function; locally it listens.
+export default app;
 
-const shutdown = () => server.close(() => pool.end().then(() => process.exit(0)));
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+if (!process.env.VERCEL) {
+  const server = app.listen(PORT, () => {
+    console.log(`career-api listening on http://localhost:${PORT}`);
+  });
+
+  const shutdown = () => server.close(() => pool.end().then(() => process.exit(0)));
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
