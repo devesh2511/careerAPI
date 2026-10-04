@@ -1,5 +1,5 @@
 // GET /health — liveness + database check.
-// GET /docs (Swagger UI) and /openapi.json — the API contract from docs/openapi.yaml.
+// GET /swagger (Swagger UI) and /openapi.json — the API contract from docs/openapi.yaml.
 import { Router } from 'express';
 import { readFileSync } from 'node:fs';
 import swaggerUi from 'swagger-ui-express';
@@ -24,12 +24,16 @@ const METHODS = ['get', 'post', 'put', 'patch', 'delete'];
 // spec with the routes Express actually has, then:
 //   • marks the ones not built yet in Swagger UI,
 //   • answers them with 501 not_implemented instead of a bare 404,
-//   • serves the spec at /openapi.json and Swagger UI at /docs.
+//   • serves the spec at /openapi.json and Swagger UI at /swagger (/docs redirects).
 // "Try it out" calls this same server, so logging in from Swagger sets the
 // session cookie and the endpoints that need a login work straight after.
 export function connectSwagger(app) {
   const spec = YAML.parse(readFileSync(new URL('../../docs/openapi.yaml', import.meta.url), 'utf8'));
-  spec.servers = [{ url: '/', description: 'This server' }];
+  // On Vercel production, name the live URL so "Try it out" visibly targets it.
+  const prod = process.env.VERCEL_ENV === 'production' && process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  spec.servers = prod
+    ? [{ url: `https://${prod}`, description: 'Production' }]
+    : [{ url: '/', description: 'This server' }];
 
   const missing = [];
   let built = 0;
@@ -53,7 +57,8 @@ export function connectSwagger(app) {
     next(hit ? new ApiError(501, 'not_implemented', 'This endpoint is in the spec but not built yet.') : undefined);
   });
   app.get('/openapi.json', (_req, res) => res.json(spec));
-  app.use('/docs', swaggerUi.serve, swaggerUi.setup(spec, {
+  app.get(['/docs', '/docs/'], (_req, res) => res.redirect(301, '/swagger'));
+  app.use('/swagger', swaggerUi.serve, swaggerUi.setup(spec, {
     customSiteTitle: 'careerAPI docs',
     swaggerOptions: { withCredentials: true, displayRequestDuration: true, tryItOutEnabled: true },
   }));
