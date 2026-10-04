@@ -10,6 +10,7 @@ export class ApiError extends Error {
 
   static invalid(message, field) { return new ApiError(400, 'invalid', message, field); }
   static unauthenticated() { return new ApiError(401, 'unauthenticated', 'Please log in.'); }
+  static notFound(what) { return new ApiError(404, 'not_found', `No such ${what}.`); }
 
   toJSON() {
     const error = { code: this.code, message: this.message };

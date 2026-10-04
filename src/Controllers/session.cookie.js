@@ -5,7 +5,8 @@ import { resolveSession, LIFETIME_DAYS } from '../Services/session.service.js';
 
 export const COOKIE = 'careerai_session';
 
-function cookieOptions() {
+// Shared with the admin cookie (admin.cookie.js).
+export function cookieOptions(maxAgeMs) {
   return {
     httpOnly: true,
     // Secure cookies need HTTPS; local dev runs on plain http.
@@ -14,20 +15,22 @@ function cookieOptions() {
     // must be sent on cross-site fetches (SameSite=None requires Secure).
     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     path: '/',
-    maxAge: LIFETIME_DAYS * 24 * 3600e3,
+    maxAge: maxAgeMs,
   };
 }
 
-export function setSessionCookie(res, token) { res.cookie(COOKIE, token, cookieOptions()); }
-export function clearSessionCookie(res) { res.clearCookie(COOKIE, { ...cookieOptions(), maxAge: undefined }); }
+const studentCookieOptions = () => cookieOptions(LIFETIME_DAYS * 24 * 3600e3);
+export function setSessionCookie(res, token) { res.cookie(COOKIE, token, studentCookieOptions()); }
+export function clearSessionCookie(res) { res.clearCookie(COOKIE, { ...studentCookieOptions(), maxAge: undefined }); }
+export const readSessionCookie = req => readCookie(req, COOKIE);
 
-// No cookie-parser dependency for one cookie.
-export function readSessionCookie(req) {
+// No cookie-parser dependency for two cookies.
+export function readCookie(req, name) {
   const header = req.headers.cookie;
   if (!header) return null;
   for (const part of header.split(';')) {
     const i = part.indexOf('=');
-    if (i > 0 && part.slice(0, i).trim() === COOKIE) {
+    if (i > 0 && part.slice(0, i).trim() === name) {
       try { return decodeURIComponent(part.slice(i + 1).trim()); } catch { return null; }
     }
   }

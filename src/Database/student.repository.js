@@ -34,9 +34,9 @@ export async function touchLastLogin(identityId, db = defaultDb) {
 
 // For the access check (schema §6.4): the student's school, whether their
 // email is on its list, and the best active individual and school plans.
-export async function findAccessFacts(studentId, db = defaultDb) {
-  const { rows } = await db.query(
-    `SELECT s.school_id,
+// Selected alongside students s LEFT JOIN schools sc (ACCESS_FROM).
+const ACCESS_FACTS = `
+            s.school_id,
             sc.name, sc.school_code,
             sc.status = 'active' AS school_live,
             EXISTS (SELECT 1 FROM school_roster r
@@ -50,10 +50,58 @@ export async function findAccessFacts(studentId, db = defaultDb) {
                SELECT plan, ends_at FROM subscriptions
                 WHERE school_id = s.school_id AND status = 'active'
                   AND now() >= starts_at AND now() < ends_at
-                ORDER BY ends_at DESC LIMIT 1) x) AS school_plan
-       FROM students s
-       LEFT JOIN schools sc ON sc.id = s.school_id AND NOT sc.is_deleted
-      WHERE s.id = $1`,
-    [studentId]);
+                ORDER BY ends_at DESC LIMIT 1) x) AS school_plan`;
+const ACCESS_FROM = 'students s LEFT JOIN schools sc ON sc.id = s.school_id AND NOT sc.is_deleted';
+
+export async function findAccessFacts(studentId, db = defaultDb) {
+  const { rows } = await db.query(`SELECT ${ACCESS_FACTS} FROM ${ACCESS_FROM} WHERE s.id = $1`, [studentId]);
   return rows[0] || null;
+}
+
+// ── Admin panel ───────────────────────────────────────────────────────────
+// A–Z, each student row with its access facts. pattern is an ILIKE pattern
+// on name or email ('' for all).
+export async function listForAdmin({ deleted, pattern }, db = defaultDb) {
+  const { rows } = await db.query(
+    `SELECT s.*, ${ACCESS_FACTS} FROM ${ACCESS_FROM}
+      WHERE s.is_deleted = $1 AND ($2 = '' OR s.full_name ILIKE $2 OR s.email ILIKE $2)
+      ORDER BY s.full_name, s.email`,
+    [deleted, pattern]);
+  return rows;
+}
+
+// Live students, how many have access, and how many through their school —
+// the access check (schema §6.4) for everyone at once. A student covered both
+// ways counts as via school, as accessFor() reports it.
+export async function countAccess(db = defaultDb) {
+  const { rows } = await db.query(
+    `WITH f AS (SELECT ${ACCESS_FACTS} FROM ${ACCESS_FROM} WHERE NOT s.is_deleted),
+          a AS (SELECT coalesce(name IS NOT NULL AND school_live AND on_roster AND school_plan IS NOT NULL, false) AS via_school,
+                       own_plan IS NOT NULL AS own FROM f)
+     SELECT count(*)::int AS students,
+            count(*) FILTER (WHERE via_school OR own)::int AS students_with_access,
+            count(*) FILTER (WHERE via_school)::int AS students_via_school
+       FROM a`);
+  return rows[0];
+}
+
+export async function exists(studentId, db = defaultDb) {
+  const { rows } = await db.query('SELECT 1 FROM students WHERE id = $1', [studentId]);
+  return rows.length > 0;
+}
+
+// Soft delete also ends every session of that student (schema §7).
+export async function softDelete(studentId, db = defaultDb) {
+  await db.query(
+    'UPDATE students SET is_deleted = true, deleted_at = coalesce(deleted_at, now()) WHERE id = $1', [studentId]);
+  await db.query('DELETE FROM sessions WHERE student_id = $1', [studentId]);
+}
+
+// Logins and sessions cascade; their payments are kept with student_id = NULL.
+export async function hardDelete(studentId, db = defaultDb) {
+  await db.query('DELETE FROM students WHERE id = $1', [studentId]);
+}
+
+export async function restore(studentId, db = defaultDb) {
+  await db.query('UPDATE students SET is_deleted = false, deleted_at = NULL WHERE id = $1', [studentId]);
 }

@@ -2,12 +2,12 @@
 // raw JSON body, throwing ApiError (400 with the bad field) when it's wrong.
 import { ApiError } from './ApiError.js';
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export const PASSWORD_MIN = 8;
 // scrypt's cost grows with input length; cap it so a huge body can't tie up the CPU.
 export const PASSWORD_MAX = 200;
 
-const str = v => (typeof v === 'string' ? v : '');
+export const str = v => (typeof v === 'string' ? v : '');
 
 export class RegisterRequest {
   constructor(body = {}) {

@@ -5,7 +5,11 @@ import { findAccessFacts } from '../Database/student.repository.js';
 import { AccessDTO } from '../DTO/AccessDTO.js';
 
 export async function accessFor(studentId, db) {
-  const f = await findAccessFacts(studentId, db);
+  return accessFromFacts(await findAccessFacts(studentId, db));
+}
+
+// f: the access facts columns (student.repository.js → ACCESS_FACTS).
+export function accessFromFacts(f) {
   const school = f.name ? { name: f.name, school_code: f.school_code } : null;
 
   if (school && f.school_live && f.on_roster && f.school_plan) return AccessDTO.granted('school', school, f.school_plan);
