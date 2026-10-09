@@ -283,7 +283,8 @@ paths:
       tags: [Me]
       summary: Save a career quiz run
       description: |
-        **Paid.** Stores the run and, in the same transaction, sets
+        **Paid.** Stores the run and, in the same transaction, deletes the
+        student's older runs (only the latest 2 are kept) and sets
         `students.current_career = top_career` (schema §4.2).
       requestBody:
         required: true
@@ -297,9 +298,9 @@ paths:
                   type: object
                   additionalProperties: { type: integer, minimum: 0, maximum: 100 }
                   example: { R: 35, I: 90, A: 40, S: 30, E: 35, C: 75 }
-                riasec_code: { type: string, example: ICA }
-                confidence: { type: [number, 'null'] }
-                top_career: { type: string, example: UX Designer }
+                riasec_code: { type: string, pattern: '^[RIASEC]{1,3}$', example: ICA }
+                confidence: { type: [string, 'null'], enum: [high, medium, low, null] }
+                top_career: { type: string, maxLength: 80, example: UX Designer }
                 results: { type: object, description: The full `appResults` object, so the results page can be re-drawn as-is }
                 answers: { type: [array, 'null'], items: {}, description: Raw quiz answers, so a run can be re-scored }
                 engine_version: { type: [string, 'null'] }
@@ -314,6 +315,25 @@ paths:
                   id: { type: integer }
                   current_career: { type: string }
         '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+
+  /me/career-quiz/latest:
+    get:
+      tags: [Me]
+      summary: My latest career quiz run
+      description: |
+        **Paid.** What the dashboard and Career Matches show after login.
+        `result` is `null` when the student hasn't taken the quiz yet.
+      responses:
+        '200':
+          description: Latest run
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result: { oneOf: [{ $ref: '#/components/schemas/QuizResult' }, { type: 'null' }] }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '402': { $ref: '#/components/responses/PaymentRequired' }
 
@@ -1341,6 +1361,22 @@ components:
         email: { type: string, format: email, description: Only ever returned to the student themself or to admins }
         school: { oneOf: [{ $ref: '#/components/schemas/SchoolRef' }, { type: 'null' }] }
         current_career: { type: [string, 'null'], example: UX Designer }
+        created_at: { type: string, format: date-time }
+
+    QuizResult:
+      type: object
+      description: One saved career quiz run. The raw answers are not returned.
+      properties:
+        id: { type: integer }
+        riasec_pct:
+          type: object
+          additionalProperties: { type: integer, minimum: 0, maximum: 100 }
+          example: { R: 22, I: 35, A: 15, S: 5, E: 35, C: 23 }
+        riasec_code: { type: string, example: IEC }
+        confidence: { type: [string, 'null'], enum: [high, medium, low, null] }
+        top_career: { type: string, example: Quantitative Analyst (Quant) }
+        results: { type: object, description: The full `appResults` object, as saved }
+        engine_version: { type: [string, 'null'] }
         created_at: { type: string, format: date-time }
 
     AccessReason:
