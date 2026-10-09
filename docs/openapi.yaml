@@ -1,0 +1,1537 @@
+openapi: 3.1.0
+info:
+  title: careerAPI
+  version: 0.1.0
+  description: |
+    Backend for the careerAI frontend: student accounts, school-based access and
+    payments, the weekly aptitude contest, and the admin panel.
+
+    **Design:** `docs/database-schema.md` (tables, rules, access check).
+    **Contest rules:** `careerAI/docs/aptitude-contest-backend.md`.
+    **Frontend contract:** every endpoint here has a matching method in the
+    frontend mocks (`careerAI/scripts/careerapi_mock.js`, `contest_api.js`), and
+    the response shapes are the same.
+
+    ### Sessions
+    - Students log in at `/auth/*` and get the `careerai_session` cookie.
+    - Admins log in at `/admin/auth/*` and get a **separate** `careerai_admin_session` cookie.
+    - Both are opaque, `HttpOnly; Secure; SameSite=None; Path=/` cookies (the frontend is another site,
+      or reaches the API through an `/api` proxy). The database stores only their SHA-256 hash.
+    - Student sessions last 30 days and slide with use; admin sessions last 12 hours.
+
+    ### Access (all or nothing)
+    Every endpoint marked **Paid** first runs the access check (schema §6.4) and
+    answers `402 payment_required` with a `reason` when the student has no access.
+    A student has access when they have an active individual plan, **or** their
+    School ID's school has an active plan and their email is on that school's list.
+
+    ### Conventions
+    - JSON throughout. Times are ISO-8601 UTC strings; the frontend shows them in IST.
+    - Money is in **paise** (₹1 = 100), as integers.
+    - Errors are always `{ "error": { "code", "message", "field"? } }`.
+    - The API never returns other students' emails or ids. Leaderboards show
+      first name + last initial (`Ananya S.`).
+servers:
+  - url: http://localhost:3000
+    description: Local development
+
+tags:
+  - name: System
+  - name: Auth
+    description: Student login and registration. Free.
+  - name: Me
+    description: The logged-in student's own account.
+  - name: Billing
+    description: Individual plans, bought through Razorpay. Non-refundable.
+  - name: Contest
+    description: The weekly aptitude contest. Paid.
+  - name: Admin auth
+  - name: Admin · Overview
+  - name: Admin · Contests
+  - name: Admin · Schools
+  - name: Admin · Students
+  - name: Admin · Admins
+
+security:
+  - studentSession: []
+
+paths:
+  # ══════════════════════════════════════════════════════════════
+  # SYSTEM
+  # ══════════════════════════════════════════════════════════════
+  /health:
+    get:
+      tags: [System]
+      summary: Liveness and database check
+      security: []
+      responses:
+        '200':
+          description: API and database are up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, const: true }
+                  db: { type: string, example: 'PostgreSQL 18.0 on x86_64-pc-linux-gnu' }
+                  server_time: { type: string, format: date-time }
+        '503':
+          description: Database unreachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, const: false }
+                  error: { type: string, example: database unreachable }
+
+  # ══════════════════════════════════════════════════════════════
+  # STUDENT AUTH
+  # ══════════════════════════════════════════════════════════════
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Create a student account
+      description: |
+        Creates the student and logs them in (sets `careerai_session`). The School
+        ID is optional. If given, it must match an active school, otherwise
+        `400 unknown_school_id` so the student can fix a typo.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [full_name, email, password]
+              properties:
+                full_name: { type: string, maxLength: 80, example: Ananya Sharma }
+                email: { type: string, format: email, example: ananya.sharma@dps.edu.in }
+                password: { type: string, format: password, minLength: 8 }
+                school_code: { type: [string, 'null'], description: 'School ID, case-insensitive. Blank = no school.', example: DPS-RKP }
+      responses:
+        '201':
+          description: Registered and logged in
+          headers:
+            Set-Cookie: { $ref: '#/components/headers/StudentCookie' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionResponse' }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '409':
+          description: '`email_taken`'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: { code: email_taken, message: An account with this email already exists. Try logging in., field: email } }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in as a student
+      description: |
+        The response includes the access check, so the app can go straight to the
+        dashboard or to the paywall. Soft-deleted accounts get the same `401` as a
+        wrong password.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Logged in
+          headers:
+            Set-Cookie: { $ref: '#/components/headers/StudentCookie' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionResponse' }
+        '401':
+          description: '`bad_credentials`'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: { code: bad_credentials, message: Email or password is incorrect. } }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Log out (deletes the session)
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+
+  # ══════════════════════════════════════════════════════════════
+  # ME
+  # ══════════════════════════════════════════════════════════════
+  /me:
+    get:
+      tags: [Me]
+      summary: The logged-in student
+      description: Free. Works without access, so the paywall can greet the student.
+      responses:
+        '200':
+          description: The student
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  student: { $ref: '#/components/schemas/Student' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+    delete:
+      tags: [Me]
+      summary: Delete my account (soft delete)
+      description: |
+        Sets `is_deleted`, deletes all sessions and hides the student from
+        leaderboards. An admin can restore it. Payment records are kept.
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /me/access:
+    get:
+      tags: [Me]
+      summary: Does this student have access, and why not?
+      description: Free. The same check every paid endpoint runs (schema §6.4).
+      responses:
+        '200':
+          description: Access result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Access' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /me/school:
+    put:
+      tags: [Me]
+      summary: Set, change or clear my School ID
+      description: Free, so a student on the paywall can add their School ID. Blank or `null` clears it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                school_code: { type: [string, 'null'], example: DPS-RKP }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionResponse' }
+        '400':
+          description: '`unknown_school_id`'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /me/profile:
+    get:
+      tags: [Me]
+      summary: Onboarding answers
+      description: '**Paid.**'
+      responses:
+        '200':
+          description: The profile, or `null` before onboarding
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profile:
+                    oneOf:
+                      - $ref: '#/components/schemas/Profile'
+                      - type: 'null'
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+    put:
+      tags: [Me]
+      summary: Save onboarding answers
+      description: '**Paid.** Creates the row on step 1; later steps fill in the rest.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Profile' }
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profile: { $ref: '#/components/schemas/Profile' }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+
+  /me/career-quiz:
+    post:
+      tags: [Me]
+      summary: Save a career quiz run
+      description: |
+        **Paid.** Stores the run and, in the same transaction, sets
+        `students.current_career = top_career` (schema §4.2).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [riasec_pct, riasec_code, top_career, results]
+              properties:
+                riasec_pct:
+                  type: object
+                  additionalProperties: { type: integer, minimum: 0, maximum: 100 }
+                  example: { R: 35, I: 90, A: 40, S: 30, E: 35, C: 75 }
+                riasec_code: { type: string, example: ICA }
+                confidence: { type: [number, 'null'] }
+                top_career: { type: string, example: UX Designer }
+                results: { type: object, description: The full `appResults` object, so the results page can be re-drawn as-is }
+                answers: { type: [array, 'null'], items: {}, description: Raw quiz answers, so a run can be re-scored }
+                engine_version: { type: [string, 'null'] }
+      responses:
+        '201':
+          description: Saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  current_career: { type: string }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+
+  /me/career:
+    put:
+      tags: [Me]
+      summary: Set my current career
+      description: '**Paid.** Career leaderboards group by this (contest spec §4.8).'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [career]
+              properties:
+                career: { type: string, example: Architect }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+
+  /me/contest-history:
+    get:
+      tags: [Contest]
+      summary: My result in every closed contest
+      description: '**Paid.** Newest first. Career ranks use the **current** career.'
+      responses:
+        '200':
+          description: History
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  career: { type: [string, 'null'] }
+                  rows:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        contest: { $ref: '#/components/schemas/Contest' }
+                        attempted: { type: boolean }
+                        score: { type: [integer, 'null'] }
+                        correct: { type: [integer, 'null'] }
+                        total_questions: { type: integer, const: 5 }
+                        time_taken_s: { type: [integer, 'null'] }
+                        global: { oneOf: [{ $ref: '#/components/schemas/Rank' }, { type: 'null' }] }
+                        career: { oneOf: [{ $ref: '#/components/schemas/Rank' }, { type: 'null' }] }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+
+  # ══════════════════════════════════════════════════════════════
+  # BILLING
+  # ══════════════════════════════════════════════════════════════
+  /billing/plans:
+    get:
+      tags: [Billing]
+      summary: Individual plans and prices
+      security: []
+      responses:
+        '200':
+          description: Plans
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plans:
+                    type: array
+                    items: { $ref: '#/components/schemas/Plan' }
+
+  /billing/checkout:
+    post:
+      tags: [Billing]
+      summary: Start paying for an individual plan
+      description: |
+        Free. Creates a `pending` subscription and a Razorpay order. The frontend
+        opens Razorpay checkout with `order_id`; the plan turns `active` only when
+        `/billing/webhook` confirms the payment. Blocked if the student already has
+        access (e.g. through their school).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan]
+              properties:
+                plan: { type: string, enum: [student_monthly, student_annual] }
+      responses:
+        '201':
+          description: Order created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order_id: { type: string, example: order_NtB4jK2qPz }
+                  amount_paise: { type: integer, example: 149900 }
+                  currency: { type: string, const: INR }
+                  plan: { type: string, example: student_annual }
+                  razorpay_key_id: { type: string, description: Public key for Razorpay checkout }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409':
+          description: '`already_has_access`'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /billing/webhook:
+    post:
+      tags: [Billing]
+      summary: Razorpay payment webhook
+      description: |
+        Called by Razorpay, not the browser. Verifies `X-Razorpay-Signature`
+        against the raw body, finds the subscription by `payment_ref`, and sets it
+        `active` (plan starts now) or `failed`. Applying the same event twice is a
+        no-op, because `(payment_provider, payment_ref)` is unique.
+      security: []
+      parameters:
+        - in: header
+          name: X-Razorpay-Signature
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, description: Razorpay event payload (payment.captured / payment.failed) }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400':
+          description: '`bad_signature`'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # ══════════════════════════════════════════════════════════════
+  # CONTEST (all paid)
+  # ══════════════════════════════════════════════════════════════
+  /contest/state:
+    get:
+      tags: [Contest]
+      summary: Starting point of the contest page
+      description: '**Paid.** `contest` is this week''s while it''s open, otherwise the next one.'
+      responses:
+        '200':
+          description: State
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  server_time: { type: string, format: date-time }
+                  contest: { $ref: '#/components/schemas/Contest' }
+                  attempt:
+                    type: object
+                    properties:
+                      status: { type: string, enum: [not_started, in_progress, submitted] }
+                      started_at: { type: [string, 'null'], format: date-time }
+                      submitted_at: { type: [string, 'null'], format: date-time }
+                      answered_count: { type: integer }
+                      auto_submitted: { type: boolean }
+                  latest_published: { oneOf: [{ $ref: '#/components/schemas/Contest' }, { type: 'null' }] }
+                  published_count: { type: integer }
+                  career: { type: [string, 'null'] }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+
+  /contest/{id}/attempt:
+    parameters:
+      - $ref: '#/components/parameters/ContestId'
+    post:
+      tags: [Contest]
+      summary: Start (or resume) my attempt
+      description: |
+        **Paid.** Starts the clock on the server. Calling it again resumes the same
+        attempt without resetting the clock. Questions never include the answer.
+      responses:
+        '200':
+          description: The attempt
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contest: { $ref: '#/components/schemas/Contest' }
+                  started_at: { type: string, format: date-time }
+                  questions:
+                    type: array
+                    items: { $ref: '#/components/schemas/PublicQuestion' }
+                  answers:
+                    type: object
+                    additionalProperties: { type: integer, minimum: 0, maximum: 3 }
+                    example: { c5-q1: 2 }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '403': { description: '`not_open`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: '`already_submitted`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /contest/{id}/attempt/answers/{questionId}:
+    parameters:
+      - $ref: '#/components/parameters/ContestId'
+      - in: path
+        name: questionId
+        required: true
+        schema: { type: string, example: c5-q1 }
+    put:
+      tags: [Contest]
+      summary: Save my answer to one question
+      description: '**Paid.** Upsert; the latest choice wins.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [option_index]
+              properties:
+                option_index: { type: integer, minimum: 0, maximum: 3 }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { description: '`bad_question` (not in this contest)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '403': { description: '`not_open`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: '`already_submitted` or `not_started`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /contest/{id}/attempt/submit:
+    parameters:
+      - $ref: '#/components/parameters/ContestId'
+    post:
+      tags: [Contest]
+      summary: Submit my attempt
+      description: '**Paid.** Final and idempotent. The response deliberately contains **no score**; scores appear after close.'
+      responses:
+        '200':
+          description: Submitted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  submitted_at: { type: string, format: date-time }
+                  time_taken_s: { type: integer, minimum: 1 }
+                  results_at: { type: string, format: date-time, description: The contest's closes_at }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '403': { description: '`not_open`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: '`not_started`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /contest/{id}/review:
+    parameters:
+      - $ref: '#/components/parameters/ContestId'
+    get:
+      tags: [Contest]
+      summary: Answers and my result, after close
+      description: '**Paid.** Available to every student after close, including those who didn''t take part.'
+      responses:
+        '200':
+          description: Review
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contest: { $ref: '#/components/schemas/Contest' }
+                  attempted: { type: boolean }
+                  score: { type: [integer, 'null'] }
+                  correct: { type: [integer, 'null'] }
+                  total_questions: { type: integer, const: 5 }
+                  time_taken_s: { type: [integer, 'null'] }
+                  global: { oneOf: [{ $ref: '#/components/schemas/Rank' }, { type: 'null' }] }
+                  career:
+                    oneOf:
+                      - allOf:
+                          - $ref: '#/components/schemas/Rank'
+                          - type: object
+                            properties:
+                              name: { type: string, example: Architect }
+                      - type: 'null'
+                  questions:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/PublicQuestion'
+                        - type: object
+                          properties:
+                            correct_index: { type: integer, minimum: 0, maximum: 3 }
+                            explanation: { type: string }
+                            your_index: { type: [integer, 'null'] }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '403': { description: '`not_published` (still open or upcoming)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /leaderboard:
+    get:
+      tags: [Contest]
+      summary: Global or career leaderboard, for one week or all time
+      description: '**Paid.** `me` is always included, even outside the top `limit`.'
+      parameters:
+        - { in: query, name: scope, schema: { type: string, enum: [global, career], default: global } }
+        - { in: query, name: period, schema: { type: string, enum: [week, live], default: week } }
+        - { in: query, name: contest_id, description: 'Closed contest (week only). Default: latest closed.', schema: { type: integer } }
+        - { in: query, name: limit, schema: { type: integer, default: 10, maximum: 100 } }
+      responses:
+        '200':
+          description: Board
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scope: { type: string, enum: [global, career] }
+                  period: { type: string, enum: [week, live] }
+                  career: { type: [string, 'null'], description: Career scope only }
+                  contest: { oneOf: [{ $ref: '#/components/schemas/Contest' }, { type: 'null' }], description: Week only }
+                  contests_count: { type: integer, description: 'Live: closed contests included' }
+                  total_participants: { type: integer }
+                  me: { oneOf: [{ $ref: '#/components/schemas/LeaderboardRow' }, { type: 'null' }] }
+                  rows: { type: array, items: { $ref: '#/components/schemas/LeaderboardRow' } }
+                  locked: { type: string, enum: [no_career], description: Only when scope=career and the student has no career yet }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '403': { description: '`not_published`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  # ══════════════════════════════════════════════════════════════
+  # ADMIN AUTH
+  # ══════════════════════════════════════════════════════════════
+  /admin/auth/login:
+    post:
+      tags: [Admin auth]
+      summary: Log in as an admin
+      description: There is no admin sign-up. The first admin comes from `npm run create-admin`; admins add each other. A locked-out admin can use `forgot-password`, or someone with database access can run `npm run reset-admin-password`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Logged in
+          headers:
+            Set-Cookie: { $ref: '#/components/headers/AdminCookie' }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  admin: { $ref: '#/components/schemas/AdminRef' }
+        '401': { description: '`bad_credentials`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/auth/logout:
+    post:
+      tags: [Admin auth]
+      summary: Log out
+      security: [{ adminSession: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+
+  /admin/auth/forgot-password:
+    post:
+      tags: [Admin auth]
+      summary: Email a password-reset code
+      description: |
+        If the email belongs to an active admin, emails them a 6-digit code valid for 15 minutes,
+        replacing any earlier code. A new code can be asked for at most once a minute.
+        Always answers `200`, so it can't be used to find out which emails are admins.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '503': { description: '`email_failed`: the email provider rejected the message', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/auth/reset-password:
+    post:
+      tags: [Admin auth]
+      summary: Set a new password with an emailed code
+      description: |
+        Trades the code from `forgot-password` for a new password. The code is single-use and allows
+        5 wrong guesses. On success every session of that admin ends (and this browser's admin cookie
+        is cleared); log in again with the new password.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code, new_password]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string, pattern: '^\d{6}$', example: '042917' }
+                new_password: { type: string, format: password, minLength: 8, maxLength: 200 }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { description: '`invalid` (bad field) or `invalid_code` (wrong, used, expired or too many tries)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/me:
+    get:
+      tags: [Admin auth]
+      summary: The logged-in admin
+      security: [{ adminSession: [] }]
+      responses:
+        '200':
+          description: Admin
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  admin: { $ref: '#/components/schemas/AdminRef' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  # ══════════════════════════════════════════════════════════════
+  # ADMIN
+  # ══════════════════════════════════════════════════════════════
+  /admin/overview:
+    get:
+      tags: [Admin · Overview]
+      summary: Numbers for the admin home screen
+      security: [{ adminSession: [] }]
+      responses:
+        '200':
+          description: Overview
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  students: { type: integer }
+                  students_with_access: { type: integer }
+                  students_via_school: { type: integer }
+                  schools: { type: integer }
+                  schools_paying: { type: integer }
+                  next_contests: { type: array, items: { $ref: '#/components/schemas/AdminContest' } }
+                  drafts_needing_questions: { type: array, items: { $ref: '#/components/schemas/AdminContest' } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /admin/contests:
+    get:
+      tags: [Admin · Contests]
+      summary: List contests
+      security: [{ adminSession: [] }]
+      parameters:
+        - $ref: '#/components/parameters/Deleted'
+      responses:
+        '200':
+          description: Newest first
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/AdminContest' } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+    post:
+      tags: [Admin · Contests]
+      summary: Create a draft contest for a Saturday
+      description: Opens 07:00 IST that Saturday and closes 19:00 IST Sunday. Must be in the future, and the week must be free.
+      security: [{ adminSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [date]
+              properties:
+                date: { type: string, format: date, description: A Saturday (IST), e.g. 2026-10-17 }
+      responses:
+        '201':
+          description: Draft created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminContestDetail' }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409': { description: '`week_taken`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/contests/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ContestId'
+    get:
+      tags: [Admin · Contests]
+      summary: One contest with its questions and answers
+      security: [{ adminSession: [] }]
+      responses:
+        '200':
+          description: Contest
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminContestDetail' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Admin · Contests]
+      summary: Delete a contest
+      description: Hard delete is only allowed before the contest opens. Use soft delete after that.
+      security: [{ adminSession: [] }]
+      parameters:
+        - $ref: '#/components/parameters/DeleteMode'
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: '`contest_locked`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/contests/{id}/restore:
+    parameters:
+      - $ref: '#/components/parameters/ContestId'
+    post:
+      tags: [Admin · Contests]
+      summary: Restore a soft-deleted contest
+      security: [{ adminSession: [] }]
+      responses:
+        '200': { description: Restored, content: { application/json: { schema: { $ref: '#/components/schemas/AdminContest' } } } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409': { description: '`week_taken`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/contests/{id}/questions/{position}:
+    parameters:
+      - $ref: '#/components/parameters/ContestId'
+      - in: path
+        name: position
+        required: true
+        schema: { type: integer, minimum: 1, maximum: 5 }
+    put:
+      tags: [Admin · Contests]
+      summary: Create or replace question 1–5
+      description: Rejected once the contest has opened (`contest_locked`). The question id is `c{contest_id}-q{position}`.
+      security: [{ adminSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QuestionInput' }
+      responses:
+        '200': { description: Saved, content: { application/json: { schema: { $ref: '#/components/schemas/AdminContestDetail' } } } }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409': { description: '`contest_locked`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/contests/{id}/schedule:
+    parameters:
+      - $ref: '#/components/parameters/ContestId'
+    post:
+      tags: [Admin · Contests]
+      summary: Schedule a draft (needs all 5 questions)
+      security: [{ adminSession: [] }]
+      responses:
+        '200': { description: Scheduled, content: { application/json: { schema: { $ref: '#/components/schemas/AdminContestDetail' } } } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409': { description: '`needs_5_questions` or `contest_locked`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/contests/{id}/unschedule:
+    parameters:
+      - $ref: '#/components/parameters/ContestId'
+    post:
+      tags: [Admin · Contests]
+      summary: Move a scheduled contest back to draft (before it opens)
+      security: [{ adminSession: [] }]
+      responses:
+        '200': { description: Back to draft, content: { application/json: { schema: { $ref: '#/components/schemas/AdminContestDetail' } } } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409': { description: '`contest_locked`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/schools:
+    get:
+      tags: [Admin · Schools]
+      summary: List schools
+      security: [{ adminSession: [] }]
+      parameters:
+        - $ref: '#/components/parameters/Deleted'
+        - { in: query, name: q, description: 'Search name, School ID or city', schema: { type: string } }
+      responses:
+        '200':
+          description: Schools, A–Z
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/School' } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+    post:
+      tags: [Admin · Schools]
+      summary: Add a school
+      security: [{ adminSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SchoolInput' }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/School' } } } }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409': { description: '`school_code_taken` or `udise_taken`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/schools/{id}:
+    parameters:
+      - $ref: '#/components/parameters/SchoolId'
+    get:
+      tags: [Admin · Schools]
+      summary: One school
+      security: [{ adminSession: [] }]
+      responses:
+        '200': { description: School, content: { application/json: { schema: { $ref: '#/components/schemas/School' } } } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Admin · Schools]
+      summary: Edit a school
+      security: [{ adminSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SchoolInput' }
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/School' } } } }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409': { description: '`school_code_taken` or `udise_taken`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    delete:
+      tags: [Admin · Schools]
+      summary: Delete a school
+      description: |
+        Soft: its plans stop counting, so its students lose school access; the list is kept.
+        Hard: removes the school and its email list. Its payment records are kept with
+        `school_id = NULL`, and students' `school_id` becomes `NULL`.
+      security: [{ adminSession: [] }]
+      parameters:
+        - $ref: '#/components/parameters/DeleteMode'
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/schools/{id}/restore:
+    parameters:
+      - $ref: '#/components/parameters/SchoolId'
+    post:
+      tags: [Admin · Schools]
+      summary: Restore a soft-deleted school
+      security: [{ adminSession: [] }]
+      responses:
+        '200': { description: Restored, content: { application/json: { schema: { $ref: '#/components/schemas/School' } } } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /admin/schools/{id}/roster:
+    parameters:
+      - $ref: '#/components/parameters/SchoolId'
+    get:
+      tags: [Admin · Schools]
+      summary: The school's student email list
+      description: Each email shows whether a student has registered with it, and whether they entered this School ID.
+      security: [{ adminSession: [] }]
+      responses:
+        '200':
+          description: Emails, A–Z
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    email: { type: string, format: email }
+                    created_at: { type: string, format: date-time }
+                    student:
+                      oneOf:
+                        - type: object
+                          properties:
+                            full_name: { type: string }
+                            linked: { type: boolean, description: The student entered this school's School ID }
+                        - type: 'null'
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+    post:
+      tags: [Admin · Schools]
+      summary: Upload emails (CSV)
+      description: |
+        One email per line (commas and semicolons also separate). A header row
+        `email` is skipped. Re-uploading is harmless. An email can be on one
+        school's list only; ones already on another school's list come back as
+        `conflicts` instead of moving.
+      security: [{ adminSession: [] }]
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema: { type: string, example: "email\nananya.sharma@dps.edu.in\nrohan.mehta@dps.edu.in" }
+      responses:
+        '200':
+          description: What happened to each email
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  added: { type: array, items: { type: string } }
+                  already: { type: array, items: { type: string } }
+                  conflicts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        email: { type: string }
+                        school: { type: string, description: Name of the school whose list has it }
+                  invalid: { type: array, items: { type: string } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /admin/schools/{id}/roster/{email}:
+    parameters:
+      - $ref: '#/components/parameters/SchoolId'
+      - { in: path, name: email, required: true, schema: { type: string, format: email } }
+    delete:
+      tags: [Admin · Schools]
+      summary: Remove one email from the list
+      description: That student loses school access straight away.
+      security: [{ adminSession: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /admin/schools/{id}/subscriptions:
+    parameters:
+      - $ref: '#/components/parameters/SchoolId'
+    get:
+      tags: [Admin · Schools]
+      summary: The school's payments
+      security: [{ adminSession: [] }]
+      responses:
+        '200':
+          description: Newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: '#/components/schemas/Subscription'
+                    - type: object
+                      properties:
+                        current: { type: boolean, description: Active and covering now }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+    post:
+      tags: [Admin · Schools]
+      summary: Record a payment the school made
+      description: Creates an `active` school plan. Renewals are new rows. No refunds.
+      security: [{ adminSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [starts_at, ends_at, amount_paise, payment_ref]
+              properties:
+                starts_at: { type: string, format: date-time, example: '2026-03-31T18:30:00Z' }
+                ends_at: { type: string, format: date-time, example: '2027-03-31T18:30:00Z' }
+                amount_paise: { type: integer, minimum: 0, example: 15000000 }
+                payment_provider: { type: string, enum: [invoice, razorpay], default: invoice }
+                payment_ref: { type: string, example: INV-2026-0012 }
+      responses:
+        '201': { description: Recorded, content: { application/json: { schema: { $ref: '#/components/schemas/Subscription' } } } }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409': { description: '`duplicate_payment`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/students:
+    get:
+      tags: [Admin · Students]
+      summary: List students
+      security: [{ adminSession: [] }]
+      parameters:
+        - $ref: '#/components/parameters/Deleted'
+        - { in: query, name: q, description: Search name or email, schema: { type: string } }
+      responses:
+        '200':
+          description: Students, A–Z, each with their access result
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: '#/components/schemas/Student'
+                    - type: object
+                      properties:
+                        is_deleted: { type: boolean }
+                        deleted_at: { type: [string, 'null'], format: date-time }
+                        access: { $ref: '#/components/schemas/Access' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /admin/students/{id}:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    delete:
+      tags: [Admin · Students]
+      summary: Delete a student
+      description: |
+        Soft: can't log in, hidden from leaderboards, restorable.
+        Hard: removes the account, profile, quiz results, attempts and answers.
+        Their payment records are kept with `student_id = NULL`.
+      security: [{ adminSession: [] }]
+      parameters:
+        - $ref: '#/components/parameters/DeleteMode'
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/students/{id}/restore:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Admin · Students]
+      summary: Restore a soft-deleted student
+      security: [{ adminSession: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/admins:
+    get:
+      tags: [Admin · Admins]
+      summary: List admins
+      security: [{ adminSession: [] }]
+      parameters:
+        - $ref: '#/components/parameters/Deleted'
+      responses:
+        '200':
+          description: Admins, A–Z
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Admin' } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+    post:
+      tags: [Admin · Admins]
+      summary: Add an admin
+      security: [{ adminSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [full_name, email, password]
+              properties:
+                full_name: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, format: password, minLength: 8 }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409': { description: '`email_taken`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/admins/{id}:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    delete:
+      tags: [Admin · Admins]
+      summary: Delete an admin (not yourself)
+      description: Hard delete keeps their contests and schools, with `created_by = NULL`.
+      security: [{ adminSession: [] }]
+      parameters:
+        - $ref: '#/components/parameters/DeleteMode'
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: '`cannot_delete_self`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/admins/{id}/restore:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Admin · Admins]
+      summary: Restore a soft-deleted admin
+      security: [{ adminSession: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+# ══════════════════════════════════════════════════════════════
+components:
+  securitySchemes:
+    studentSession:
+      type: apiKey
+      in: cookie
+      name: careerai_session
+    adminSession:
+      type: apiKey
+      in: cookie
+      name: careerai_admin_session
+
+  headers:
+    StudentCookie:
+      description: '`careerai_session=<token>; HttpOnly; Secure; SameSite=None; Path=/`'
+      schema: { type: string }
+    AdminCookie:
+      description: '`careerai_admin_session=<token>; HttpOnly; Secure; SameSite=None; Path=/`'
+      schema: { type: string }
+
+  parameters:
+    ContestId:
+      in: path
+      name: id
+      required: true
+      description: Contest id, which is also its public number (#1, #2…)
+      schema: { type: integer, minimum: 1 }
+    SchoolId:
+      in: path
+      name: id
+      required: true
+      schema: { type: integer, minimum: 1 }
+    Deleted:
+      in: query
+      name: deleted
+      description: '`true` lists only soft-deleted rows'
+      schema: { type: boolean, default: false }
+    DeleteMode:
+      in: query
+      name: mode
+      description: '`soft` sets is_deleted and can be undone. `hard` is permanent (schema §7).'
+      schema: { type: string, enum: [soft, hard], default: soft }
+
+  responses:
+    Ok:
+      description: Done
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              ok: { type: boolean, const: true }
+    Invalid:
+      description: Validation failed. `field` names the input to highlight.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: { code: invalid, message: Password must be at least 8 characters., field: password } }
+    Unauthenticated:
+      description: '`unauthenticated`: no valid session'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: { code: unauthenticated, message: Please log in. } }
+    PaymentRequired:
+      description: '`payment_required`: the student has no access. `reason` says why, for the paywall.'
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: object
+                properties:
+                  code: { type: string, const: payment_required }
+                  message: { type: string }
+                  reason: { $ref: '#/components/schemas/AccessReason' }
+          example: { error: { code: payment_required, message: Your school isn't covering you yet., reason: not_on_roster } }
+    NotFound:
+      description: '`not_found`'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, example: invalid }
+            message: { type: string, description: Safe to show to the user }
+            field: { type: string, description: The request field that caused it, when there is one }
+
+    SchoolRef:
+      type: object
+      properties:
+        name: { type: string, example: 'Delhi Public School, R.K. Puram' }
+        school_code: { type: string, example: DPS-RKP }
+
+    Student:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        full_name: { type: string, example: Ananya Sharma }
+        leaderboard_name: { type: string, example: Ananya S., description: First name + last initial (schema §2.1) }
+        email: { type: string, format: email, description: Only ever returned to the student themself or to admins }
+        school: { oneOf: [{ $ref: '#/components/schemas/SchoolRef' }, { type: 'null' }] }
+        current_career: { type: [string, 'null'], example: UX Designer }
+        created_at: { type: string, format: date-time }
+
+    AccessReason:
+      type: [string, 'null']
+      enum: [no_school, not_on_roster, school_not_subscribed, null]
+      description: |
+        - `no_school`: no School ID given
+        - `not_on_roster`: gave a School ID, but their email isn't on that school's list
+        - `school_not_subscribed`: on the list, but the school has no active plan
+
+    Access:
+      type: object
+      properties:
+        has_access: { type: boolean }
+        source: { type: [string, 'null'], enum: [school, individual, null] }
+        reason: { $ref: '#/components/schemas/AccessReason' }
+        school: { oneOf: [{ $ref: '#/components/schemas/SchoolRef' }, { type: 'null' }] }
+        ends_at: { type: [string, 'null'], format: date-time, description: When the covering plan ends }
+        plan: { type: [string, 'null'], example: school_annual }
+
+    SessionResponse:
+      type: object
+      properties:
+        student: { $ref: '#/components/schemas/Student' }
+        access: { $ref: '#/components/schemas/Access' }
+
+    Profile:
+      type: object
+      required: [class]
+      properties:
+        class: { type: integer, enum: [9, 10] }
+        board: { type: [string, 'null'], enum: [CBSE, ICSE, State Board, null] }
+        medium: { type: [string, 'null'], enum: [English, Hindi, Regional Language, null] }
+        city: { type: [string, 'null'] }
+        marks:
+          type: [object, 'null']
+          additionalProperties: { type: number, minimum: 0, maximum: 100 }
+          example: { Mathematics: 87, Science: 79, English: 82, Social Studies: 74 }
+        favourite_subjects: { type: [array, 'null'], items: { type: string } }
+        hobbies: { type: [array, 'null'], items: { type: string } }
+        dream_job: { type: [string, 'null'] }
+        career_preference: { type: [string, 'null'], enum: [Private Sector, Government Job, Entrepreneur, null] }
+        study_location: { type: [string, 'null'], enum: ['Yes, anywhere', 'Same state only', 'Prefer home city', null] }
+        completed_at: { type: [string, 'null'], format: date-time, readOnly: true }
+
+    Plan:
+      type: object
+      properties:
+        plan: { type: string, example: student_annual }
+        label: { type: string, example: Annual }
+        amount_paise: { type: integer, example: 149900 }
+        months: { type: integer, example: 12 }
+
+    Subscription:
+      type: object
+      properties:
+        id: { type: integer }
+        payer_type: { type: string, enum: [school, student] }
+        school_id: { type: [integer, 'null'], description: '`NULL` after the school is hard-deleted' }
+        student_id: { type: [string, 'null'], format: uuid, description: '`NULL` after the student is hard-deleted' }
+        plan: { type: string }
+        starts_at: { type: string, format: date-time }
+        ends_at: { type: string, format: date-time, description: Exclusive }
+        amount_paise: { type: integer }
+        currency: { type: string, const: INR }
+        status: { type: string, enum: [pending, active, failed] }
+        payment_provider: { type: [string, 'null'], enum: [razorpay, invoice, null] }
+        payment_ref: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+
+    Contest:
+      description: As seen by students (contest spec §4)
+      type: object
+      properties:
+        id: { type: integer, example: 5 }
+        number: { type: integer, example: 5 }
+        opens_at: { type: string, format: date-time, example: '2026-10-03T01:30:00.000Z' }
+        closes_at: { type: string, format: date-time, example: '2026-10-04T13:30:00.000Z' }
+        status: { type: string, enum: [upcoming, open, closed] }
+        question_count: { type: integer, const: 5 }
+        points_per_question: { type: integer, const: 10 }
+
+    PublicQuestion:
+      description: A question without its answer
+      type: object
+      properties:
+        id: { type: string, example: c5-q1 }
+        area: { type: string, enum: [Logical Reasoning, Numerical Ability, Verbal Ability, Spatial Reasoning] }
+        text: { type: string }
+        options: { type: array, items: { type: string }, minItems: 4, maxItems: 4 }
+
+    Rank:
+      type: object
+      properties:
+        rank: { type: integer, example: 50 }
+        total: { type: integer, example: 500 }
+
+    LeaderboardRow:
+      type: object
+      properties:
+        rank: { type: integer }
+        name: { type: string, example: Ananya S. }
+        career: { type: [string, 'null'], example: Architect }
+        career_emoji: { type: string, example: 🏛️ }
+        score: { type: integer }
+        correct: { type: integer }
+        total_questions: { type: integer, description: 'Week: 5. Live: 5 × contests.' }
+        time_taken_s: { type: integer }
+        contests: { type: integer, description: Live only }
+        is_me: { type: boolean }
+
+    AdminRef:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        full_name: { type: string }
+
+    Admin:
+      allOf:
+        - $ref: '#/components/schemas/AdminRef'
+        - type: object
+          properties:
+            last_login_at: { type: [string, 'null'], format: date-time }
+            is_deleted: { type: boolean }
+            deleted_at: { type: [string, 'null'], format: date-time }
+            created_at: { type: string, format: date-time }
+            is_me: { type: boolean }
+
+    AdminContest:
+      type: object
+      properties:
+        id: { type: integer }
+        opens_at: { type: string, format: date-time }
+        closes_at: { type: string, format: date-time }
+        status: { type: string, enum: [draft, scheduled] }
+        state: { type: string, enum: [upcoming, open, closed], description: Worked out from now() }
+        locked: { type: boolean, description: True once it has opened; questions can't change }
+        scored_at: { type: [string, 'null'], format: date-time }
+        question_count: { type: integer, minimum: 0, maximum: 5 }
+        created_by: { type: [string, 'null'], description: Admin's name }
+        is_deleted: { type: boolean }
+        deleted_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: string, format: date-time }
+
+    AdminContestDetail:
+      allOf:
+        - $ref: '#/components/schemas/AdminContest'
+        - type: object
+          properties:
+            questions:
+              type: array
+              items:
+                allOf:
+                  - $ref: '#/components/schemas/PublicQuestion'
+                  - type: object
+                    properties:
+                      position: { type: integer, minimum: 1, maximum: 5 }
+                      correct_index: { type: integer, minimum: 0, maximum: 3 }
+                      explanation: { type: string }
+
+    QuestionInput:
+      type: object
+      required: [area, text, options, correct_index, explanation]
+      properties:
+        area: { type: string, enum: [Logical Reasoning, Numerical Ability, Verbal Ability, Spatial Reasoning] }
+        text: { type: string }
+        options: { type: array, items: { type: string }, minItems: 4, maxItems: 4, uniqueItems: true }
+        correct_index: { type: integer, minimum: 0, maximum: 3 }
+        explanation: { type: string, description: Shown to students after the contest closes }
+
+    SchoolInput:
+      type: object
+      required: [name, school_code, city, state, contact_name, contact_email]
+      properties:
+        name: { type: string }
+        school_code: { type: string, pattern: '^[A-Za-z0-9-]{3,20}$', description: 'The School ID students type. Stored upper-case.', example: DPS-RKP }
+        udise_code: { type: [string, 'null'], pattern: '^[0-9]{11}$' }
+        board: { type: [string, 'null'], enum: [CBSE, ICSE, State Board, null] }
+        city: { type: string }
+        state: { type: string }
+        status: { type: string, enum: [active, suspended], default: active }
+        contact_name: { type: string }
+        contact_email: { type: string, format: email }
+        contact_phone: { type: [string, 'null'] }
+
+    School:
+      allOf:
+        - $ref: '#/components/schemas/SchoolInput'
+        - type: object
+          properties:
+            id: { type: integer }
+            is_deleted: { type: boolean }
+            deleted_at: { type: [string, 'null'], format: date-time }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+            roster_count: { type: integer, description: Emails on the school's list }
+            student_count: { type: integer, description: Students who entered this School ID }
+            subscription:
+              description: The current plan, else the latest one, else null
+              oneOf:
+                - type: object
+                  properties:
+                    active: { type: boolean }
+                    plan: { type: string }
+                    ends_at: { type: string, format: date-time }
+                - type: 'null'
