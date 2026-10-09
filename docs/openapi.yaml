@@ -337,6 +337,29 @@ paths:
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '402': { $ref: '#/components/responses/PaymentRequired' }
 
+  /me/career-quiz/runs:
+    get:
+      tags: [Me]
+      summary: My saved career quiz runs
+      description: |
+        **Paid.** The kept runs (at most 2), newest first. Progress →
+        Top Match Evolution shows `results[1]` as "Previous" and
+        `results[0]` as "Latest". Empty before the first run.
+      responses:
+        '200':
+          description: Saved runs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    maxItems: 2
+                    items: { $ref: '#/components/schemas/QuizResult' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+
   /me/career:
     put:
       tags: [Me]

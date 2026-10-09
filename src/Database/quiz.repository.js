@@ -29,3 +29,12 @@ export async function findLatest(studentId, db = defaultDb) {
     [studentId]);
   return rows[0] || null;
 }
+
+// The student's newest `limit` runs, newest first.
+export async function findNewest(studentId, limit, db = defaultDb) {
+  const { rows } = await db.query(
+    `SELECT * FROM career_quiz_results WHERE student_id = $1
+      ORDER BY created_at DESC, id DESC LIMIT $2`,
+    [studentId, limit]);
+  return rows;
+}

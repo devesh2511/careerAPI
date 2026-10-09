@@ -25,3 +25,10 @@ export async function latestRun(studentId) {
   const row = await quiz.findLatest(studentId);
   return { result: row ? new QuizResultDTO(row) : null };
 }
+
+// GET /me/career-quiz/runs. The kept runs (at most RUNS_KEPT), newest first;
+// Progress → Top Match Evolution compares them.
+export async function savedRuns(studentId) {
+  const rows = await quiz.findNewest(studentId, RUNS_KEPT);
+  return { results: rows.map(row => new QuizResultDTO(row)) };
+}

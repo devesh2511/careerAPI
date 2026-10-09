@@ -3,6 +3,7 @@
 //   GET /me   GET /me/access   PUT /me/school
 //   PUT /me/career (paid)   GET /me/contest-history (paid)
 //   POST /me/career-quiz (paid)   GET /me/career-quiz/latest (paid)
+//   GET /me/career-quiz/runs (paid)
 import { Router } from 'express';
 import { requireStudent, requireAccess } from './session.cookie.js';
 import { CareerRequest } from '../DTO/contest.requests.js';
@@ -11,7 +12,7 @@ import { SchoolCodeRequest } from '../DTO/auth.requests.js';
 import { accessFor } from '../Services/access.service.js';
 import { toStudentDTO, setCareer, setSchool } from '../Services/student.service.js';
 import { history } from '../Services/contest.service.js';
-import { saveRun, latestRun } from '../Services/quiz.service.js';
+import { saveRun, latestRun, savedRuns } from '../Services/quiz.service.js';
 
 export const meController = Router();
 meController.use(requireStudent);
@@ -46,4 +47,9 @@ meController.post('/career-quiz', requireAccess, async (req, res) => {
 // What the dashboard and Career Matches show after login.
 meController.get('/career-quiz/latest', requireAccess, async (req, res) => {
   res.json(await latestRun(req.student.id));
+});
+
+// Both kept runs, newest first — Progress → Top Match Evolution.
+meController.get('/career-quiz/runs', requireAccess, async (req, res) => {
+  res.json(await savedRuns(req.student.id));
 });
