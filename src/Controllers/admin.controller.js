@@ -1,12 +1,14 @@
 // The admin panel's API (docs/openapi.yaml → Admin *), mounted at /admin.
 //   POST /admin/auth/login   POST /admin/auth/logout   GET /admin/me
+//   POST /admin/auth/forgot-password   POST /admin/auth/reset-password
 //   GET  /admin/overview
 //   /admin/contests/*  /admin/schools/*  /admin/students/*  /admin/admins/*
-// Everything but login and logout needs an admin session.
+// Everything but /admin/auth/* needs an admin session.
 import { Router } from 'express';
-import { LoginRequest } from '../DTO/auth.requests.js';
+import { LoginRequest, ForgotPasswordRequest, ResetPasswordRequest } from '../DTO/auth.requests.js';
 import { AdminRefDTO } from '../DTO/AdminDTO.js';
 import * as adminAuth from '../Services/admin.auth.service.js';
+import * as adminPassword from '../Services/admin.password.service.js';
 import { overview } from '../Services/admin.overview.service.js';
 import { setAdminCookie, clearAdminCookie, readAdminCookie, requireAdmin } from './admin.cookie.js';
 import { adminContestsController } from './admin.contests.controller.js';
@@ -24,6 +26,18 @@ adminController.post('/auth/login', async (req, res) => {
 
 adminController.post('/auth/logout', async (req, res) => {
   await adminAuth.logout(readAdminCookie(req));
+  clearAdminCookie(res);
+  res.json({ ok: true });
+});
+
+// Always 200, whether or not the email is an admin's.
+adminController.post('/auth/forgot-password', async (req, res) => {
+  await adminPassword.requestReset(new ForgotPasswordRequest(req.body));
+  res.json({ ok: true });
+});
+
+adminController.post('/auth/reset-password', async (req, res) => {
+  await adminPassword.resetPassword(new ResetPasswordRequest(req.body));
   clearAdminCookie(res);
   res.json({ ok: true });
 });

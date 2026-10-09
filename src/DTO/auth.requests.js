@@ -38,3 +38,29 @@ export class LoginRequest {
     this.password = str(body.password).slice(0, PASSWORD_MAX);
   }
 }
+
+// Forgot-password doesn't reveal whether the email exists, so a malformed
+// email is simply not found rather than an error.
+export class ForgotPasswordRequest {
+  constructor(body = {}) {
+    this.email = str(body.email).trim().toLowerCase().slice(0, 254);
+  }
+}
+
+export class ResetPasswordRequest {
+  constructor(body = {}) {
+    this.email = str(body.email).trim().toLowerCase().slice(0, 254);
+    if (!this.email) throw ApiError.invalid('Please enter your email.', 'email');
+
+    this.code = str(body.code).replace(/\s+/g, '');
+    if (!/^\d{6}$/.test(this.code)) throw ApiError.invalid('The code is 6 digits.', 'code');
+
+    this.newPassword = str(body.new_password);
+    if (this.newPassword.length < PASSWORD_MIN) {
+      throw ApiError.invalid(`Password must be at least ${PASSWORD_MIN} characters.`, 'new_password');
+    }
+    if (this.newPassword.length > PASSWORD_MAX) {
+      throw ApiError.invalid(`Password must be at most ${PASSWORD_MAX} characters.`, 'new_password');
+    }
+  }
+}

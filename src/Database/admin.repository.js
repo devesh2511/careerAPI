@@ -71,3 +71,44 @@ export async function restore(adminId, db = defaultDb) {
     'UPDATE admins SET is_deleted = false, deleted_at = NULL WHERE id = $1', [adminId]);
   return rowCount > 0;
 }
+
+// ── Password resets (admin_password_resets) ──
+
+// Replaces any earlier code, unless one was issued in the last cooldownSeconds.
+// Returns false when the cooldown blocked it.
+export async function upsertPasswordReset({ adminId, codeHash, lifetimeMinutes, cooldownSeconds }, db = defaultDb) {
+  const { rowCount } = await db.query(
+    `INSERT INTO admin_password_resets (admin_id, code_hash, expires_at)
+     VALUES ($1, $2, now() + make_interval(mins => $3))
+     ON CONFLICT (admin_id) DO UPDATE
+       SET code_hash = EXCLUDED.code_hash, attempts = 0,
+           created_at = now(), expires_at = EXCLUDED.expires_at
+       WHERE admin_password_resets.created_at < now() - make_interval(secs => $4)`,
+    [adminId, codeHash, lifetimeMinutes, cooldownSeconds]);
+  return rowCount > 0;
+}
+
+// The unexpired reset for a live admin, by email, locked for the check.
+export async function findPasswordReset(email, db = defaultDb) {
+  const { rows } = await db.query(
+    `SELECT r.admin_id, r.code_hash, r.attempts
+       FROM admin_password_resets r JOIN admins a ON a.id = r.admin_id
+      WHERE lower(a.email) = lower($1) AND NOT a.is_deleted AND r.expires_at > now()
+      FOR UPDATE OF r`,
+    [email]);
+  return rows[0] || null;
+}
+
+export async function countPasswordResetAttempt(adminId, db = defaultDb) {
+  await db.query('UPDATE admin_password_resets SET attempts = attempts + 1 WHERE admin_id = $1', [adminId]);
+}
+
+export async function deletePasswordReset(adminId, db = defaultDb) {
+  await db.query('DELETE FROM admin_password_resets WHERE admin_id = $1', [adminId]);
+}
+
+// Sets a new password and ends every session of that admin.
+export async function setPassword(adminId, passwordHash, db = defaultDb) {
+  await db.query('UPDATE admins SET password_hash = $1 WHERE id = $2', [passwordHash, adminId]);
+  await db.query('DELETE FROM admin_sessions WHERE admin_id = $1', [adminId]);
+}
