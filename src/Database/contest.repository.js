@@ -1,4 +1,5 @@
-// Queries on contests and contest_questions, for the admin panel.
+// Queries on contests and contest_questions, for the admin panel and (at
+// the bottom) for students.
 // upcoming/open/closed and locked are not stored: they come from now().
 import { db as defaultDb } from './db.js';
 
@@ -91,4 +92,82 @@ export async function hardDelete(contestId, db = defaultDb) {
 // Restoring can collide with a contest created in the freed week (23P01).
 export async function restore(contestId, db = defaultDb) {
   await db.query('UPDATE contests SET is_deleted = false, deleted_at = NULL WHERE id = $1', [contestId]);
+}
+
+// ── Student side ──────────────────────────────────────────────────────────
+// Students only ever see scheduled, live contests (schema §5.1).
+const VISIBLE = `
+  SELECT c.id, c.opens_at, c.closes_at, c.scored_at,
+         CASE WHEN now() < c.opens_at THEN 'upcoming'
+              WHEN now() < c.closes_at THEN 'open'
+              ELSE 'closed' END AS state
+    FROM contests c
+   WHERE c.status = 'scheduled' AND NOT c.is_deleted`;
+
+export async function findVisible(contestId, db = defaultDb) {
+  const { rows } = await db.query(`${VISIBLE} AND c.id = $1`, [contestId]);
+  return rows[0] || null;
+}
+
+// The open contest, else the next one. Contests never overlap, so the
+// soonest not-yet-closed one is it.
+export async function currentOrNext(db = defaultDb) {
+  const { rows } = await db.query(`${VISIBLE} AND c.closes_at > now() ORDER BY c.opens_at LIMIT 1`);
+  return rows[0] || null;
+}
+
+// Newest first.
+export async function listClosed(db = defaultDb) {
+  const { rows } = await db.query(`${VISIBLE} AND c.closes_at <= now() ORDER BY c.opens_at DESC`);
+  return rows;
+}
+
+export async function latestClosed(db = defaultDb) {
+  const { rows } = await db.query(`${VISIBLE} AND c.closes_at <= now() ORDER BY c.opens_at DESC LIMIT 1`);
+  return rows[0] || null;
+}
+
+export async function countClosed(db = defaultDb) {
+  const { rows } = await db.query(`SELECT count(*)::int AS n FROM (${VISIBLE} AND c.closes_at <= now()) x`);
+  return rows[0].n;
+}
+
+// No answers: for the open contest.
+export async function publicQuestions(contestId, db = defaultDb) {
+  const { rows } = await db.query(
+    'SELECT id, area, text, options FROM contest_questions WHERE contest_id = $1 ORDER BY position',
+    [contestId]);
+  return rows;
+}
+
+// With the answers and the student's pick: only after close.
+export async function reviewQuestions(contestId, studentId, db = defaultDb) {
+  const { rows } = await db.query(
+    `SELECT q.id, q.area, q.text, q.options, q.correct_index, q.explanation, aa.option_index AS your_index
+       FROM contest_questions q
+       LEFT JOIN attempts a ON a.contest_id = q.contest_id AND a.student_id = $2
+       LEFT JOIN attempt_answers aa ON aa.attempt_id = a.id AND aa.question_id = q.id
+      WHERE q.contest_id = $1 ORDER BY q.position`,
+    [contestId, studentId]);
+  return rows;
+}
+
+// Closed contests the close job hasn't scored yet (it may run late).
+export async function listUnscored(db = defaultDb) {
+  const { rows } = await db.query(
+    `SELECT id FROM contests
+      WHERE status = 'scheduled' AND closes_at <= now() AND scored_at IS NULL ORDER BY opens_at`);
+  return rows.map(r => r.id);
+}
+
+// Locks the contest for scoring; null when it's already scored (or not closed).
+export async function lockForScoring(contestId, db = defaultDb) {
+  const { rows } = await db.query(
+    `SELECT id FROM contests WHERE id = $1 AND closes_at <= now() AND scored_at IS NULL FOR UPDATE`,
+    [contestId]);
+  return rows[0] || null;
+}
+
+export async function markScored(contestId, db = defaultDb) {
+  await db.query('UPDATE contests SET scored_at = now() WHERE id = $1', [contestId]);
 }

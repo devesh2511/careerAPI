@@ -32,6 +32,17 @@ export async function touchLastLogin(identityId, db = defaultDb) {
   await db.query('UPDATE auth_identities SET last_login_at = now() WHERE id = $1', [identityId]);
 }
 
+// PUT /me/career. career_updated_at only moves when the career changes.
+export async function setCareer(studentId, career, db = defaultDb) {
+  const { rows } = await db.query(
+    `UPDATE students
+        SET career_updated_at = CASE WHEN current_career IS DISTINCT FROM $2 THEN now() ELSE career_updated_at END,
+            current_career = $2
+      WHERE id = $1 RETURNING *`,
+    [studentId, career]);
+  return rows[0];
+}
+
 // For the access check (schema §6.4): the student's school, whether their
 // email is on its list, and the best active individual and school plans.
 // Selected alongside students s LEFT JOIN schools sc (ACCESS_FROM).
@@ -95,6 +106,17 @@ export async function softDelete(studentId, db = defaultDb) {
   await db.query(
     'UPDATE students SET is_deleted = true, deleted_at = coalesce(deleted_at, now()) WHERE id = $1', [studentId]);
   await db.query('DELETE FROM sessions WHERE student_id = $1', [studentId]);
+}
+
+// Replaces the student's login password and signs them out everywhere.
+// false when the student has no password login.
+export async function setPassword(studentId, passwordHash, db = defaultDb) {
+  const { rowCount } = await db.query(
+    "UPDATE auth_identities SET password_hash = $2 WHERE student_id = $1 AND provider = 'password'",
+    [studentId, passwordHash]);
+  if (!rowCount) return false;
+  await db.query('DELETE FROM sessions WHERE student_id = $1', [studentId]);
+  return true;
 }
 
 // Logins and sessions cascade; their payments are kept with student_id = NULL.

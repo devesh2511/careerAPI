@@ -4,6 +4,7 @@ import * as students from '../Database/student.repository.js';
 import { ApiError } from '../DTO/ApiError.js';
 import { StudentDTO } from '../DTO/StudentDTO.js';
 import { accessFromFacts } from './access.service.js';
+import { hashPassword } from './password.service.js';
 
 export async function list({ deleted, pattern }) {
   const rows = await students.listForAdmin({ deleted, pattern });
@@ -26,4 +27,13 @@ export async function remove(studentId, mode) {
 export async function restore(studentId) {
   await mustExist(studentId);
   await students.restore(studentId);
+}
+
+// req: SetStudentPasswordRequest. Works on soft-deleted students too; they
+// still can't log in until restored.
+export async function setPassword(studentId, req) {
+  await mustExist(studentId);
+  const passwordHash = await hashPassword(req.password);
+  const ok = await withTransaction(db => students.setPassword(studentId, passwordHash, db));
+  if (!ok) throw new ApiError(409, 'no_password_login', 'This student has no password login.');
 }

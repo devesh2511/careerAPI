@@ -1,7 +1,8 @@
-// The session cookie and the requireStudent middleware: the HTTP side of
+// The session cookie and the requireStudent / requirePaid middleware: the HTTP side of
 // sessions. The logic lives in Services/session.service.js.
 import { ApiError } from '../DTO/ApiError.js';
 import { resolveSession, LIFETIME_DAYS } from '../Services/session.service.js';
+import { accessFor } from '../Services/access.service.js';
 
 export const COOKIE = 'careerai_session';
 
@@ -46,3 +47,12 @@ export async function requireStudent(req, res, next) {
   req.student = session.student;
   next();
 }
+
+// For Paid endpoints: a logged-in student with access (schema §6.4), else
+// 401 / 402 payment_required with the paywall's reason.
+export async function requireAccess(req, _res, next) {
+  const access = await accessFor(req.student.id);
+  if (!access.has_access) throw ApiError.paymentRequired(access.reason);
+  next();
+}
+export const requirePaid = [requireStudent, requireAccess];

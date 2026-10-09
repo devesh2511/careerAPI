@@ -58,6 +58,19 @@ export class CreateAdminRequest {
   }
 }
 
+// POST /admin/students/:id/password  { password }
+export class SetStudentPasswordRequest {
+  constructor(body = {}) {
+    this.password = str(body.password);
+    if (this.password.length < PASSWORD_MIN) {
+      throw ApiError.invalid(`Password must be at least ${PASSWORD_MIN} characters.`, 'password');
+    }
+    if (this.password.length > PASSWORD_MAX) {
+      throw ApiError.invalid(`Password must be at most ${PASSWORD_MAX} characters.`, 'password');
+    }
+  }
+}
+
 // POST /admin/contests  { date: 'YYYY-MM-DD' }, a Saturday in the future.
 export class CreateContestRequest {
   constructor(body = {}) {

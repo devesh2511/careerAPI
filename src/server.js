@@ -10,6 +10,7 @@ import { ApiError } from './DTO/ApiError.js';
 import { systemController, connectSwagger } from './Controllers/system.controller.js';
 import { authController } from './Controllers/auth.controller.js';
 import { meController } from './Controllers/me.controller.js';
+import { contestController } from './Controllers/contest.controller.js';
 import { adminController } from './Controllers/admin.controller.js';
 
 const app = express();
@@ -23,6 +24,7 @@ app.use(express.json({ limit: '100kb' }));
 app.use(systemController);
 app.use('/auth', authController);
 app.use('/me', meController);
+app.use(contestController);
 app.use('/admin', adminController);
 // Last of the routes: it checks which spec endpoints the controllers above provide.
 connectSwagger(app);

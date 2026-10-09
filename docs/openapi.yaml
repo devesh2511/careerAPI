@@ -1147,6 +1147,32 @@ paths:
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /admin/students/{id}/password:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Admin · Students]
+      summary: Reset a student's password
+      description: |
+        Sets a new password and signs the student out on every device.
+        A soft-deleted student still can't log in until restored.
+      security: [{ adminSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, format: password, minLength: 8, maxLength: 200 }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: '`no_password_login`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
   /admin/admins:
     get:
       tags: [Admin · Admins]

@@ -1,6 +1,6 @@
 // Students (docs/openapi.yaml → Admin · Students), at /admin/students.
 import { Router } from 'express';
-import { uuidId, listDeleted, deleteMode, searchPattern } from '../DTO/admin.requests.js';
+import { uuidId, listDeleted, deleteMode, searchPattern, SetStudentPasswordRequest } from '../DTO/admin.requests.js';
 import * as students from '../Services/admin.student.service.js';
 
 export const adminStudentsController = Router();
@@ -17,5 +17,11 @@ adminStudentsController.delete('/:id', async (req, res) => {
 
 adminStudentsController.post('/:id/restore', async (req, res) => {
   await students.restore(studentId(req));
+  res.json({ ok: true });
+});
+
+// Sets a new password and signs the student out everywhere.
+adminStudentsController.post('/:id/password', async (req, res) => {
+  await students.setPassword(studentId(req), new SetStudentPasswordRequest(req.body));
   res.json({ ok: true });
 });

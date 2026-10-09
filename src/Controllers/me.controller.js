@@ -1,10 +1,12 @@
-// The logged-in student (docs/openapi.yaml → Me). Both are free endpoints:
-// the paywall needs them before the student has access.
-//   GET /me   GET /me/access
+// The logged-in student (docs/openapi.yaml → Me). GET /me and /me/access
+// are free: the paywall needs them before the student has access.
+//   GET /me   GET /me/access   PUT /me/career (paid)   GET /me/contest-history (paid)
 import { Router } from 'express';
-import { requireStudent } from './session.cookie.js';
+import { requireStudent, requireAccess } from './session.cookie.js';
+import { CareerRequest } from '../DTO/contest.requests.js';
 import { accessFor } from '../Services/access.service.js';
-import { toStudentDTO } from '../Services/student.service.js';
+import { toStudentDTO, setCareer } from '../Services/student.service.js';
+import { history } from '../Services/contest.service.js';
 
 export const meController = Router();
 meController.use(requireStudent);
@@ -15,4 +17,14 @@ meController.get('/', async (req, res) => {
 
 meController.get('/access', async (req, res) => {
   res.json(await accessFor(req.student.id));
+});
+
+// Career leaderboards group by this (contest spec §4.8).
+meController.put('/career', requireAccess, async (req, res) => {
+  await setCareer(req.student.id, new CareerRequest(req.body));
+  res.json({ ok: true });
+});
+
+meController.get('/contest-history', requireAccess, async (req, res) => {
+  res.json(await history(req.student));
 });
