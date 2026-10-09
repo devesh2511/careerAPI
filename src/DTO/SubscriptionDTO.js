@@ -1,5 +1,7 @@
 // The Subscription object in docs/openapi.yaml. `current` is only set on the
-// admin's list of a school's payments.
+// admin's lists of a school's or a student's payments.
+import { ApiError } from './ApiError.js';
+
 export class SubscriptionDTO {
   constructor(row) {
     this.id = Number(row.id);   // bigint comes back from pg as a string
@@ -16,5 +18,17 @@ export class SubscriptionDTO {
     this.payment_ref = row.payment_ref;
     this.created_at = row.created_at;
     if (row.current !== undefined) this.current = row.current;
+  }
+}
+
+// Runs an insert, turning a reused (payment_provider, payment_ref) into 409.
+export async function guardDuplicatePayment(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err.code === '23505' && err.constraint === 'subscriptions_payment_provider_payment_ref_key') {
+      throw new ApiError(409, 'duplicate_payment', 'This payment reference is already recorded.', 'payment_ref');
+    }
+    throw err;
   }
 }

@@ -5,7 +5,7 @@ import * as roster from '../Database/roster.repository.js';
 import * as subscriptions from '../Database/subscription.repository.js';
 import { ApiError } from '../DTO/ApiError.js';
 import { SchoolDTO } from '../DTO/SchoolDTO.js';
-import { SubscriptionDTO } from '../DTO/SubscriptionDTO.js';
+import { SubscriptionDTO, guardDuplicatePayment } from '../DTO/SubscriptionDTO.js';
 import { parseRoster } from '../DTO/admin.requests.js';
 
 // A taken School ID or UDISE+ code becomes a 409 on that field.
@@ -113,12 +113,5 @@ export async function listSubscriptions(schoolId) {
 // req: SchoolSubscriptionRequest. Creates an active school_annual plan.
 export async function recordPayment(schoolId, req) {
   await mustExist(schoolId);
-  try {
-    return new SubscriptionDTO(await subscriptions.insertSchoolPlan(schoolId, req));
-  } catch (err) {
-    if (err.code === '23505' && err.constraint === 'subscriptions_payment_provider_payment_ref_key') {
-      throw new ApiError(409, 'duplicate_payment', 'This payment reference is already recorded.', 'payment_ref');
-    }
-    throw err;
-  }
+  return new SubscriptionDTO(await guardDuplicatePayment(() => subscriptions.insertSchoolPlan(schoolId, req)));
 }

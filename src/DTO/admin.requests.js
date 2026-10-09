@@ -152,8 +152,10 @@ export class SchoolRequest {
 }
 
 // POST /admin/schools/:id/subscriptions — a payment the school made.
-export class SchoolSubscriptionRequest {
-  constructor(body = {}) {
+// A payment an admin records by hand: the dates it covers, the amount and
+// the payment's reference. providers: the accepted payment_provider values.
+class PaymentRequest {
+  constructor(body, providers) {
     const date = key => {
       const t = typeof body[key] === 'string' ? Date.parse(body[key]) : NaN;
       return Number.isNaN(t) ? null : new Date(t);
@@ -170,14 +172,31 @@ export class SchoolSubscriptionRequest {
       throw ApiError.invalid('Enter the amount paid.', 'amount_paise');
     }
 
-    this.paymentProvider = body.payment_provider ?? 'invoice';
-    if (this.paymentProvider !== 'invoice' && this.paymentProvider !== 'razorpay') {
-      throw ApiError.invalid('Payment provider must be invoice or razorpay.', 'payment_provider');
+    this.paymentProvider = body.payment_provider ?? providers[0];
+    if (!providers.includes(this.paymentProvider)) {
+      throw ApiError.invalid(`Payment provider must be one of: ${providers.join(', ')}.`, 'payment_provider');
     }
     this.paymentRef = str(body.payment_ref).trim();
     if (!this.paymentRef) throw ApiError.invalid('Enter the invoice or payment reference.', 'payment_ref');
     if (this.paymentRef.length > 100) {
       throw ApiError.invalid('The reference must be at most 100 characters.', 'payment_ref');
+    }
+  }
+}
+
+export class SchoolSubscriptionRequest extends PaymentRequest {
+  constructor(body = {}) { super(body, ['invoice', 'razorpay']); }
+}
+
+// Students pay outside the website; an admin records the payment ID.
+export const STUDENT_PLANS = ['student_monthly', 'student_annual'];
+export const STUDENT_PAYMENT_PROVIDERS = ['upi', 'bank_transfer', 'razorpay', 'cash', 'other'];
+export class StudentSubscriptionRequest extends PaymentRequest {
+  constructor(body = {}) {
+    super(body, STUDENT_PAYMENT_PROVIDERS);
+    this.plan = body.plan;
+    if (!STUDENT_PLANS.includes(this.plan)) {
+      throw ApiError.invalid('Plan must be student_monthly or student_annual.', 'plan');
     }
   }
 }

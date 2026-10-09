@@ -64,3 +64,13 @@ export class ResetPasswordRequest {
     }
   }
 }
+
+// PUT /me/school. Blank or null clears it.
+export class SchoolCodeRequest {
+  constructor(body = {}) {
+    this.schoolCode = str(body.school_code).trim().toUpperCase() || null;
+    if (this.schoolCode && this.schoolCode.length > 20) {
+      throw ApiError.invalid('School ID must be at most 20 characters.', 'school_code');
+    }
+  }
+}

@@ -96,6 +96,18 @@ export async function countAccess(db = defaultDb) {
   return rows[0];
 }
 
+// One student with their access facts, deleted or not. null when no such id.
+export async function findForAdmin(studentId, db = defaultDb) {
+  const { rows } = await db.query(`SELECT s.*, ${ACCESS_FACTS} FROM ${ACCESS_FROM} WHERE s.id = $1`, [studentId]);
+  return rows[0] || null;
+}
+
+// PUT /me/school; null clears it.
+export async function setSchool(studentId, schoolId, db = defaultDb) {
+  const { rows } = await db.query('UPDATE students SET school_id = $2 WHERE id = $1 RETURNING *', [studentId, schoolId]);
+  return rows[0];
+}
+
 export async function exists(studentId, db = defaultDb) {
   const { rows } = await db.query('SELECT 1 FROM students WHERE id = $1', [studentId]);
   return rows.length > 0;

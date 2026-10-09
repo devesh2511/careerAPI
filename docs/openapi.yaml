@@ -25,6 +25,12 @@ info:
     A student has access when they have an active individual plan, **or** their
     School ID's school has an active plan and their email is on that school's list.
 
+    ### Payments
+    There is no online checkout. Students and schools pay outside the website,
+    and an admin records each payment with its payment ID
+    (`POST /admin/students/{id}/subscriptions`, `POST /admin/schools/{id}/subscriptions`).
+    Recording it is what grants access.
+
     ### Conventions
     - JSON throughout. Times are ISO-8601 UTC strings; the frontend shows them in IST.
     - Money is in **paise** (₹1 = 100), as integers.
@@ -41,8 +47,6 @@ tags:
     description: Student login and registration. Free.
   - name: Me
     description: The logged-in student's own account.
-  - name: Billing
-    description: Individual plans, bought through Razorpay. Non-refundable.
   - name: Contest
     description: The weekly aptitude contest. Paid.
   - name: Admin auth
@@ -361,93 +365,6 @@ paths:
                         career: { oneOf: [{ $ref: '#/components/schemas/Rank' }, { type: 'null' }] }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '402': { $ref: '#/components/responses/PaymentRequired' }
-
-  # ══════════════════════════════════════════════════════════════
-  # BILLING
-  # ══════════════════════════════════════════════════════════════
-  /billing/plans:
-    get:
-      tags: [Billing]
-      summary: Individual plans and prices
-      security: []
-      responses:
-        '200':
-          description: Plans
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  plans:
-                    type: array
-                    items: { $ref: '#/components/schemas/Plan' }
-
-  /billing/checkout:
-    post:
-      tags: [Billing]
-      summary: Start paying for an individual plan
-      description: |
-        Free. Creates a `pending` subscription and a Razorpay order. The frontend
-        opens Razorpay checkout with `order_id`; the plan turns `active` only when
-        `/billing/webhook` confirms the payment. Blocked if the student already has
-        access (e.g. through their school).
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [plan]
-              properties:
-                plan: { type: string, enum: [student_monthly, student_annual] }
-      responses:
-        '201':
-          description: Order created
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  order_id: { type: string, example: order_NtB4jK2qPz }
-                  amount_paise: { type: integer, example: 149900 }
-                  currency: { type: string, const: INR }
-                  plan: { type: string, example: student_annual }
-                  razorpay_key_id: { type: string, description: Public key for Razorpay checkout }
-        '400': { $ref: '#/components/responses/Invalid' }
-        '401': { $ref: '#/components/responses/Unauthenticated' }
-        '409':
-          description: '`already_has_access`'
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
-
-  /billing/webhook:
-    post:
-      tags: [Billing]
-      summary: Razorpay payment webhook
-      description: |
-        Called by Razorpay, not the browser. Verifies `X-Razorpay-Signature`
-        against the raw body, finds the subscription by `payment_ref`, and sets it
-        `active` (plan starts now) or `failed`. Applying the same event twice is a
-        no-op, because `(payment_provider, payment_ref)` is unique.
-      security: []
-      parameters:
-        - in: header
-          name: X-Razorpay-Signature
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { type: object, description: Razorpay event payload (payment.captured / payment.failed) }
-      responses:
-        '200': { $ref: '#/components/responses/Ok' }
-        '400':
-          description: '`bad_signature`'
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
 
   # ══════════════════════════════════════════════════════════════
   # CONTEST (all paid)
@@ -1120,6 +1037,25 @@ paths:
   /admin/students/{id}:
     parameters:
       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Admin · Students]
+      summary: One student, deleted or not
+      security: [{ adminSession: [] }]
+      responses:
+        '200':
+          description: The student with their access result
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Student'
+                  - type: object
+                    properties:
+                      is_deleted: { type: boolean }
+                      deleted_at: { type: [string, 'null'], format: date-time }
+                      access: { $ref: '#/components/schemas/Access' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
     delete:
       tags: [Admin · Students]
       summary: Delete a student
@@ -1134,6 +1070,57 @@ paths:
         '200': { $ref: '#/components/responses/Ok' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/students/{id}/subscriptions:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Admin · Students]
+      summary: The student's individual payments
+      security: [{ adminSession: [] }]
+      responses:
+        '200':
+          description: Newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: '#/components/schemas/Subscription'
+                    - type: object
+                      properties:
+                        current: { type: boolean, description: Active and covering now }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Admin · Students]
+      summary: Record a payment the student made
+      description: |
+        Students pay outside the website (UPI, bank transfer, a payment link…);
+        an admin records the payment ID here. Creates an `active` individual plan,
+        which gives the student access for these dates. Renewals are new rows. No refunds.
+      security: [{ adminSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan, starts_at, ends_at, amount_paise, payment_ref]
+              properties:
+                plan: { type: string, enum: [student_monthly, student_annual] }
+                starts_at: { type: string, format: date-time, example: '2026-10-09T18:30:00Z' }
+                ends_at: { type: string, format: date-time, example: '2027-10-09T18:30:00Z' }
+                amount_paise: { type: integer, minimum: 0, example: 149900 }
+                payment_provider: { type: string, enum: [upi, bank_transfer, razorpay, cash, other], default: upi }
+                payment_ref: { type: string, description: The payment ID / UTR / receipt number, example: '426713859012' }
+      responses:
+        '201': { description: Recorded, content: { application/json: { schema: { $ref: '#/components/schemas/Subscription' } } } }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: '`duplicate_payment`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /admin/students/{id}/restore:
     parameters:
@@ -1399,14 +1386,6 @@ components:
         study_location: { type: [string, 'null'], enum: ['Yes, anywhere', 'Same state only', 'Prefer home city', null] }
         completed_at: { type: [string, 'null'], format: date-time, readOnly: true }
 
-    Plan:
-      type: object
-      properties:
-        plan: { type: string, example: student_annual }
-        label: { type: string, example: Annual }
-        amount_paise: { type: integer, example: 149900 }
-        months: { type: integer, example: 12 }
-
     Subscription:
       type: object
       properties:
@@ -1420,7 +1399,10 @@ components:
         amount_paise: { type: integer }
         currency: { type: string, const: INR }
         status: { type: string, enum: [pending, active, failed] }
-        payment_provider: { type: [string, 'null'], enum: [razorpay, invoice, null] }
+        payment_provider:
+          type: [string, 'null']
+          enum: [invoice, razorpay, upi, bank_transfer, cash, other, null]
+          description: 'Schools: invoice or razorpay. Students: upi, bank_transfer, razorpay, cash or other.'
         payment_ref: { type: [string, 'null'] }
         created_at: { type: string, format: date-time }
 
