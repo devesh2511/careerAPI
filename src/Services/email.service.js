@@ -1,24 +1,31 @@
-// Sends email through Resend's HTTP API (https://resend.com/docs/api-reference).
-// Needs RESEND_API_KEY and EMAIL_FROM. Without a key, local runs print the
-// email to the console instead; on Vercel that's an error, so codes never
-// end up in production logs.
+// Sends email through Gmail SMTP with nodemailer. Needs SMTP_USER (the Gmail
+// address) and SMTP_PASS (a Google app password, not the account password).
+// Without them, local runs print the email to the console instead; on Vercel
+// that's an error, so codes never end up in production logs.
+import nodemailer from 'nodemailer';
 import { ApiError } from '../DTO/ApiError.js';
 
+let transporter;
+
 export async function sendEmail({ to, subject, text }) {
-  const key = process.env.RESEND_API_KEY;
-  if (!key) {
-    if (process.env.VERCEL) throw new Error('RESEND_API_KEY is not set');
-    console.log(`[email not sent: RESEND_API_KEY is not set]\nTo: ${to}\nSubject: ${subject}\n\n${text}\n`);
+  const { SMTP_USER: user, SMTP_PASS: pass } = process.env;
+  if (!user || !pass) {
+    if (process.env.VERCEL) throw new Error('SMTP_USER and SMTP_PASS must be set');
+    console.log(`[email not sent: SMTP_USER/SMTP_PASS not set]\nTo: ${to}\nSubject: ${subject}\n\n${text}\n`);
     return;
   }
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: process.env.EMAIL_FROM, to: [to], subject, text }),
-    signal: AbortSignal.timeout(10_000),
+  transporter ??= nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user, pass },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 10_000,
   });
-  if (!res.ok) {
-    console.error(`resend: ${res.status} ${await res.text()}`);
+  try {
+    // Gmail rewrites any other From address to the account's own, so use it directly.
+    await transporter.sendMail({ from: { name: 'careerAI', address: user }, to, subject, text });
+  } catch (err) {
+    console.error(`smtp: ${err.code ?? ''} ${err.response ?? err.message}`);
     throw new ApiError(503, 'email_failed', "We couldn't send the email. Please try again later.");
   }
 }
