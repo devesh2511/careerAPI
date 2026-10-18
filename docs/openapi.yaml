@@ -49,6 +49,8 @@ tags:
     description: The logged-in student's own account.
   - name: Contest
     description: The weekly aptitude contest. Paid.
+  - name: Careers
+    description: The career catalogue the quiz matches against. Free.
   - name: Roadmap
     description: Career roadmaps, Class 10 to first job. Paid.
   - name: Admin auth
@@ -410,6 +412,30 @@ paths:
                         career: { oneOf: [{ $ref: '#/components/schemas/Rank' }, { type: 'null' }] }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '402': { $ref: '#/components/responses/PaymentRequired' }
+
+  # ══════════════════════════════════════════════════════════════
+  # CAREERS (free)
+  # ══════════════════════════════════════════════════════════════
+  /careers:
+    get:
+      tags: [Careers]
+      summary: The career catalogue
+      description: |
+        Every career, in catalogue order — the order the frontend's matching
+        engine (riasec_engine.js) sees them in. Each item has the same shape
+        as an entry of the old `RIASEC_CAREERS` array. Cacheable for 5 minutes.
+      security: []
+      responses:
+        '200':
+          description: Catalogue
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  careers:
+                    type: array
+                    items: { $ref: '#/components/schemas/Career' }
 
   # ══════════════════════════════════════════════════════════════
   # ROADMAP (all paid)
@@ -1455,6 +1481,23 @@ components:
         results: { type: object, description: The full `appResults` object, as saved }
         engine_version: { type: [string, 'null'] }
         created_at: { type: string, format: date-time }
+
+    Career:
+      type: object
+      properties:
+        title: { type: string, example: Computer Science Engineer (Software & Systems) }
+        emoji: { type: string, example: 💻 }
+        field: { type: string, example: Technology }
+        family: { type: string, example: computing, description: Careers competing for the same shortlist slot share one }
+        stream: { type: string, example: PCM+CS }
+        salary: { type: string, example: ₹5–9 LPA starting }
+        riasec:
+          type: object
+          additionalProperties: { type: integer, minimum: 0, maximum: 100 }
+          example: { R: 35, I: 90, A: 40, S: 30, E: 35, C: 75 }
+        domains: { type: array, items: { type: string }, example: [digital] }
+        subjects: { type: array, items: { type: string }, example: [maths, computers, physics] }
+        why: { type: string, example: Breaking a problem into logical steps and building something that works. }
 
     Roadmap:
       type: object
