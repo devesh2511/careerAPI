@@ -1,6 +1,7 @@
 // The logged-in student (docs/openapi.yaml → Me). GET /me, /me/access and
 // PUT /me/school are free: the paywall needs them before the student has access.
-//   GET /me   GET /me/access   PUT /me/school
+//   GET /me   PUT /me   GET /me/access   PUT /me/school
+//   GET /me/profile (paid)   PUT /me/profile (paid)
 //   PUT /me/career (paid)   GET /me/contest-history (paid)
 //   POST /me/career-quiz (paid)   GET /me/career-quiz/latest (paid)
 //   GET /me/career-quiz/runs (paid)
@@ -9,8 +10,11 @@ import { requireStudent, requireAccess } from './session.cookie.js';
 import { CareerRequest } from '../DTO/contest.requests.js';
 import { CareerQuizRequest } from '../DTO/quiz.requests.js';
 import { SchoolCodeRequest } from '../DTO/auth.requests.js';
+import { NameRequest, ProfileRequest } from '../DTO/profile.requests.js';
 import { accessFor } from '../Services/access.service.js';
-import { toStudentDTO, setCareer, setSchool } from '../Services/student.service.js';
+import {
+  toStudentDTO, setCareer, setSchool, setName, getProfile, saveProfile,
+} from '../Services/student.service.js';
 import { history } from '../Services/contest.service.js';
 import { saveRun, latestRun, savedRuns } from '../Services/quiz.service.js';
 
@@ -19,6 +23,19 @@ meController.use(requireStudent);
 
 meController.get('/', async (req, res) => {
   res.json({ student: await toStudentDTO(req.student) });
+});
+
+// Free like GET /me: it's the student's own name.
+meController.put('/', async (req, res) => {
+  res.json({ student: await setName(req.student.id, new NameRequest(req.body)) });
+});
+
+meController.get('/profile', requireAccess, async (req, res) => {
+  res.json(await getProfile(req.student.id));
+});
+
+meController.put('/profile', requireAccess, async (req, res) => {
+  res.json(await saveProfile(req.student.id, new ProfileRequest(req.body)));
 });
 
 meController.get('/access', async (req, res) => {

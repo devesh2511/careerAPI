@@ -43,6 +43,13 @@ export async function setCareer(studentId, career, db = defaultDb) {
   return rows[0];
 }
 
+// PUT /me. leaderboard_name is derived from this, so it changes too.
+export async function setName(studentId, fullName, db = defaultDb) {
+  const { rows } = await db.query(
+    'UPDATE students SET full_name = $2 WHERE id = $1 RETURNING *', [studentId, fullName]);
+  return rows[0];
+}
+
 // For the access check (schema §6.4): the student's school, whether their
 // email is on its list, and the best active individual and school plans.
 // Selected alongside students s LEFT JOIN schools sc (ACCESS_FROM).

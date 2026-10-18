@@ -242,6 +242,30 @@ paths:
                 properties:
                   student: { $ref: '#/components/schemas/Student' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
+    put:
+      tags: [Me]
+      summary: Change my name
+      description: Free. `leaderboard_name` is derived from it, so it changes too.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [full_name]
+              properties:
+                full_name: { type: string, maxLength: 80, example: Ananya Sharma }
+      responses:
+        '200':
+          description: The updated student
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  student: { $ref: '#/components/schemas/Student' }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
     delete:
       tags: [Me]
       summary: Delete my account (soft delete)
@@ -313,7 +337,11 @@ paths:
     put:
       tags: [Me]
       summary: Save onboarding answers
-      description: '**Paid.** Creates the row on step 1; later steps fill in the rest.'
+      description: |
+        **Paid.** Creates the row on step 1; later steps fill in the rest.
+        `class` is always required. Any other answer only changes when its key
+        is sent (`null` clears it), so a step or the Settings editor can save
+        just its own fields.
       requestBody:
         required: true
         content:
