@@ -59,6 +59,8 @@ tags:
   - name: Admin · Schools
   - name: Admin · Students
   - name: Admin · Admins
+  - name: Admin · Roadmaps
+    description: Edit any career's roadmap. Students see a save straight away.
 
 security:
   - studentSession: []
@@ -518,6 +520,10 @@ paths:
                   latest_published: { oneOf: [{ $ref: '#/components/schemas/Contest' }, { type: 'null' }] }
                   published_count: { type: integer }
                   career: { type: [string, 'null'] }
+                  careers:
+                    type: array
+                    items: { type: string }
+                    description: 'The career leaderboards on offer: the current career, then the rest of the latest career quiz run''s top careers'
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '402': { $ref: '#/components/responses/PaymentRequired' }
 
@@ -656,6 +662,7 @@ paths:
       parameters:
         - { in: query, name: scope, schema: { type: string, enum: [global, career], default: global } }
         - { in: query, name: period, schema: { type: string, enum: [week, live], default: week } }
+        - { in: query, name: career, description: 'Career scope only: one of `careers` from /contest/state (400 otherwise). Default: the current career. The student is always ranked on it.', schema: { type: string } }
         - { in: query, name: contest_id, description: 'Closed contest (week only). Default: latest closed.', schema: { type: integer } }
         - { in: query, name: limit, schema: { type: integer, default: 10, maximum: 100 } }
       responses:
@@ -1352,6 +1359,91 @@ paths:
         '200': { $ref: '#/components/responses/Ok' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
 
+  # ── Admin · Roadmaps ──
+  # The career is a query parameter: titles like "UI/UX Designer" contain a slash.
+  /admin/roadmaps:
+    get:
+      tags: [Admin · Roadmaps]
+      summary: Every career and its roadmap's state
+      description: All careers in catalogue order, including those with no roadmap yet.
+      security: [{ adminSession: [] }]
+      responses:
+        '200':
+          description: Careers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  careers:
+                    type: array
+                    items: { $ref: '#/components/schemas/AdminRoadmapRow' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /admin/roadmap:
+    parameters:
+      - in: query
+        name: career
+        required: true
+        description: The career's exact title.
+        schema: { type: string, maxLength: 80, example: UI/UX Designer }
+    get:
+      tags: [Admin · Roadmaps]
+      summary: One career's roadmap, for editing
+      description: '`roadmap` is `null` when the career has none yet.'
+      security: [{ adminSession: [] }]
+      responses:
+        '200':
+          description: Career and roadmap
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminRoadmap' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Admin · Roadmaps]
+      summary: Save a career's roadmap
+      description: |
+        Replaces the whole roadmap. Send the `version` you opened (`null` when
+        the career had no roadmap). If someone saved in the meantime the save
+        is refused with `409 roadmap_changed`, so nobody's changes are lost.
+        Limits: 1–10 stages; each with a "when" (≤60 chars), a title (≤150)
+        and 1–10 actions (≤200 each).
+      security: [{ adminSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [steps, version]
+              properties:
+                steps:
+                  type: array
+                  minItems: 1
+                  maxItems: 10
+                  items: { $ref: '#/components/schemas/RoadmapStep' }
+                version: { type: [integer, 'null'], example: 3 }
+      responses:
+        '200':
+          description: Saved — the new state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminRoadmap' }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: '`roadmap_changed`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    delete:
+      tags: [Admin · Roadmaps]
+      summary: Delete a career's roadmap
+      description: Students then see "still writing the roadmap" for this career.
+      security: [{ adminSession: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
 # ══════════════════════════════════════════════════════════════
 components:
   securitySchemes:
@@ -1507,16 +1599,57 @@ components:
         emoji: { type: [string, 'null'], example: 🎨 }
         steps:
           type: array
-          items:
-            type: object
-            properties:
-              period: { type: string, example: Class 11–12 }
-              title: { type: string, example: Choose PCM + Computer Science · Build skills }
-              actions:
-                type: array
-                items: { type: string }
-                example: [Focus on Physics, Maths, CS — target 85%+]
+          items: { $ref: '#/components/schemas/RoadmapStep' }
         updated_at: { type: string, format: date-time }
+
+    RoadmapStep:
+      type: object
+      required: [period, title, actions]
+      properties:
+        period: { type: string, maxLength: 60, example: Class 11–12 }
+        title: { type: string, maxLength: 150, example: Choose PCM + Computer Science · Build skills }
+        actions:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items: { type: string, maxLength: 200 }
+          example: [Focus on Physics, Maths, CS — target 85%+]
+
+    AdminRoadmapRow:
+      type: object
+      description: One career in the admin's roadmap list. Roadmap fields are null when it has none.
+      properties:
+        career: { type: string, example: UI/UX Designer }
+        emoji: { type: string, example: 🎨 }
+        field: { type: string, example: Design + Technology }
+        stream: { type: string, example: PCM+CS }
+        family: { type: string, example: computing }
+        has_roadmap: { type: boolean }
+        step_count: { type: [integer, 'null'], example: 5 }
+        version: { type: [integer, 'null'], example: 1 }
+        updated_at: { type: [string, 'null'], format: date-time }
+        updated_by: { type: [string, 'null'], description: The admin's name; null for seeded roadmaps }
+
+    AdminRoadmap:
+      type: object
+      properties:
+        career:
+          type: object
+          properties:
+            title: { type: string }
+            emoji: { type: string }
+            field: { type: string }
+            stream: { type: string }
+            salary: { type: string, example: ₹5–13 LPA starting }
+        roadmap:
+          oneOf:
+            - type: 'null'
+            - type: object
+              properties:
+                steps: { type: array, items: { $ref: '#/components/schemas/RoadmapStep' } }
+                version: { type: integer }
+                updated_at: { type: string, format: date-time }
+                updated_by: { type: [string, 'null'] }
 
     AccessReason:
       type: [string, 'null']

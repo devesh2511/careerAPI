@@ -3,6 +3,7 @@
 //   POST /admin/auth/forgot-password   POST /admin/auth/reset-password
 //   GET  /admin/overview
 //   /admin/contests/*  /admin/schools/*  /admin/students/*  /admin/admins/*
+//   /admin/roadmaps    /admin/roadmap?career=
 // Everything but /admin/auth/* needs an admin session.
 import { Router } from 'express';
 import { LoginRequest, ForgotPasswordRequest, ResetPasswordRequest } from '../DTO/auth.requests.js';
@@ -15,6 +16,7 @@ import { adminContestsController } from './admin.contests.controller.js';
 import { adminSchoolsController } from './admin.schools.controller.js';
 import { adminStudentsController } from './admin.students.controller.js';
 import { adminAdminsController } from './admin.admins.controller.js';
+import { adminRoadmapsController } from './admin.roadmaps.controller.js';
 
 export const adminController = Router();
 
@@ -54,3 +56,5 @@ adminController.use('/contests', requireAdmin, adminContestsController);
 adminController.use('/schools', requireAdmin, adminSchoolsController);
 adminController.use('/students', requireAdmin, adminStudentsController);
 adminController.use('/admins', requireAdmin, adminAdminsController);
+// /admin/roadmaps and /admin/roadmap?career= (each route checks the session).
+adminController.use(adminRoadmapsController);

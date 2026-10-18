@@ -26,6 +26,14 @@ export async function latestRun(studentId) {
   return { result: row ? new QuizResultDTO(row) : null };
 }
 
+// The careers the contest page offers a career leaderboard for: the
+// current career, then the rest of the latest run's top careers.
+export async function suggestedCareers(student) {
+  const titles = await quiz.latestTopCareers(student.id);
+  const clean = titles.map(t => t.trim().replace(/\s+/g, ' ')).filter(t => t && t.length <= 80);
+  return [...new Set([student.current_career, ...clean].filter(Boolean))];
+}
+
 // GET /me/career-quiz/runs. The kept runs (at most RUNS_KEPT), newest first;
 // Progress → Top Match Evolution compares them.
 export async function savedRuns(studentId) {

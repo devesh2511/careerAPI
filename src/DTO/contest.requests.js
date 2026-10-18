@@ -25,7 +25,7 @@ export class AnswerRequest {
   }
 }
 
-// GET /leaderboard?scope=&period=&contest_id=&limit=
+// GET /leaderboard?scope=&period=&career=&contest_id=&limit=
 export class LeaderboardQuery {
   constructor(query = {}) {
     this.scope = query.scope ?? 'global';
@@ -35,6 +35,12 @@ export class LeaderboardQuery {
     this.period = query.period ?? 'week';
     if (this.period !== 'week' && this.period !== 'live') {
       throw ApiError.invalid('period must be week or live.', 'period');
+    }
+    // Career scope only: one of the student's suggested careers. Default: the current one.
+    this.career = null;
+    if (query.career != null && query.career !== '') {
+      if (this.scope !== 'career') throw ApiError.invalid('career needs scope=career.', 'career');
+      this.career = new CareerRequest({ career: query.career }).career;
     }
     this.contestId = query.contest_id == null || query.contest_id === '' ? null : contestId(query.contest_id);
 

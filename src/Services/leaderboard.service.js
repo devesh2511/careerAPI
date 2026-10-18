@@ -1,15 +1,21 @@
 // GET /leaderboard (contest spec §4.6): global or career, one closed week
-// or Live (every closed contest). The open contest never appears.
+// or Live (every closed contest). The open contest never appears. A career
+// board can be any of the student's suggested careers; the student is
+// always ranked on it, even when it isn't their current career.
 import * as contests from '../Database/contest.repository.js';
 import * as leaderboards from '../Database/leaderboard.repository.js';
 import { ApiError } from '../DTO/ApiError.js';
 import { ContestDTO, LeaderboardRowDTO } from '../DTO/ContestDTO.js';
 import { ensureScored } from './contest.scoring.service.js';
+import { suggestedCareers } from './quiz.service.js';
 
 // q: LeaderboardQuery.
 export async function leaderboard(q, student) {
   const live = q.period === 'live';
-  const career = q.scope === 'career' ? student.current_career : null;
+  const career = q.scope === 'career' ? q.career ?? student.current_career : null;
+  if (q.career && q.career !== student.current_career && !(await suggestedCareers(student)).includes(q.career)) {
+    throw ApiError.invalid('career must be one of your suggested careers.', 'career');
+  }
   const body = { scope: q.scope, period: q.period };
   if (q.scope === 'career') body.career = career;
 

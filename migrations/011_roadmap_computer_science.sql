@@ -1,5 +1,5 @@
 -- Roadmap for Computer Science Engineer (Software & Systems), as approved in
--- careerAI/docs/roadmap-computer-science-engineer.html.
+-- docs/roadmaps/computer-science-engineer.html.
 
 INSERT INTO career_roadmaps (career, emoji, sort_order, steps) VALUES (
   'Computer Science Engineer (Software & Systems)', '💻', 0,

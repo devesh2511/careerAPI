@@ -18,7 +18,8 @@ const LIVE = `
    GROUP BY a.student_id`;
 
 // The top `limit` rows plus the student's own row wherever it is.
-// contestId null = Live; career null = global.
+// contestId null = Live; career null = global. A career board is the
+// students whose current career is `career`, plus the student themselves.
 // → { total, rows, me } with me null when the student isn't on the board.
 export async function board({ contestId, career, studentId, limit }, db = defaultDb) {
   const params = [studentId, career, limit];
@@ -31,7 +32,7 @@ export async function board({ contestId, career, studentId, limit }, db = defaul
               ROW_NUMBER() OVER (ORDER BY src.score DESC, src.time_taken_s, s.full_name, s.id) AS pos,
               (COUNT(*) OVER ())::int AS total
          FROM src JOIN students s ON s.id = src.student_id AND NOT s.is_deleted
-        WHERE ($2::text IS NULL OR s.current_career = $2)
+        WHERE ($2::text IS NULL OR s.current_career = $2 OR s.id = $1)
        WINDOW w AS (ORDER BY src.score DESC, src.time_taken_s)
      )
      SELECT *, student_id = $1 AS is_me FROM board

@@ -9,6 +9,7 @@ import * as leaderboards from '../Database/leaderboard.repository.js';
 import { ApiError } from '../DTO/ApiError.js';
 import { ContestDTO, PublicQuestionDTO, ReviewQuestionDTO, QUESTION_COUNT, rankOrNull } from '../DTO/ContestDTO.js';
 import { ensureScored } from './contest.scoring.service.js';
+import { suggestedCareers } from './quiz.service.js';
 
 const notOpen = () => new ApiError(403, 'not_open', 'This contest is not open.');
 const notStarted = () => new ApiError(409, 'not_started', 'Start the contest first.');
@@ -25,8 +26,8 @@ const attemptStatus = a => (!a ? 'not_started' : a.submitted_at ? 'submitted' : 
 
 // GET /contest/state
 export async function state(student) {
-  const [contest, latest, publishedCount] = await Promise.all([
-    contests.currentOrNext(), contests.latestClosed(), contests.countClosed(),
+  const [contest, latest, publishedCount, careers] = await Promise.all([
+    contests.currentOrNext(), contests.latestClosed(), contests.countClosed(), suggestedCareers(student),
   ]);
   const a = contest ? await attempts.find(contest.id, student.id) : null;
   return {
@@ -42,6 +43,7 @@ export async function state(student) {
     latest_published: ContestDTO.orNull(latest),
     published_count: publishedCount,
     career: student.current_career,
+    careers,
   };
 }
 

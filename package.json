@@ -9,6 +9,8 @@
     "start": "node --env-file=.env src/server.js",
     "dev": "node --env-file=.env --watch src/server.js",
     "migrate": "node --env-file=.env scripts/migrate.js",
+    "seed-roadmaps": "node --env-file=.env scripts/seed-roadmaps.js",
+    "roadmap-review": "node --env-file=.env scripts/build-roadmap-review.js",
     "create-admin": "node --env-file=.env scripts/create-admin.js",
     "reset-admin-password": "node --env-file=.env scripts/reset-admin-password.js"
   },

@@ -216,3 +216,36 @@ export function parseRoster(text) {
   }
   return { emails, invalid };
 }
+
+// PUT /admin/roadmap?career= — { steps, version }. version is the one the
+// admin opened (null for a career with no roadmap yet).
+export const ROADMAP_LIMITS = { steps: 10, actions: 10, period: 60, title: 150, action: 200 };
+export class RoadmapRequest {
+  constructor(body = {}) {
+    const L = ROADMAP_LIMITS;
+    const raw = Array.isArray(body.steps) ? body.steps : [];
+    if (!raw.length) throw ApiError.invalid('Add at least one stage.', 'steps');
+    if (raw.length > L.steps) throw ApiError.invalid(`A roadmap can have at most ${L.steps} stages.`, 'steps');
+    this.steps = raw.map((s, i) => {
+      const n = `Stage ${i + 1}`;
+      const period = str(s && s.period).trim(), title = str(s && s.title).trim();
+      const actions = (Array.isArray(s && s.actions) ? s.actions : []).map(a => str(a).trim()).filter(Boolean);
+      if (!period) throw ApiError.invalid(`${n}: enter when it happens (e.g. Class 11–12).`, 'steps');
+      if (period.length > L.period) throw ApiError.invalid(`${n}: "when" must be at most ${L.period} characters.`, 'steps');
+      if (!title) throw ApiError.invalid(`${n}: enter a title.`, 'steps');
+      if (title.length > L.title) throw ApiError.invalid(`${n}: the title must be at most ${L.title} characters.`, 'steps');
+      if (!actions.length) throw ApiError.invalid(`${n}: add at least one action.`, 'steps');
+      if (actions.length > L.actions) throw ApiError.invalid(`${n}: at most ${L.actions} actions.`, 'steps');
+      if (actions.some(a => a.length > L.action)) {
+        throw ApiError.invalid(`${n}: each action must be at most ${L.action} characters.`, 'steps');
+      }
+      return { period, title, actions };
+    });
+
+    const v = body.version;
+    this.version = v === null || v === undefined ? null : Number(v);
+    if (this.version !== null && (!Number.isInteger(this.version) || this.version < 1)) {
+      throw ApiError.invalid('version must be a positive integer or null.', 'version');
+    }
+  }
+}

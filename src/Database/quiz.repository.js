@@ -30,6 +30,20 @@ export async function findLatest(studentId, db = defaultDb) {
   return rows[0] || null;
 }
 
+// The career titles of the student's newest run, best match first. [] when
+// they haven't taken the quiz.
+export async function latestTopCareers(studentId, db = defaultDb) {
+  const { rows } = await db.query(
+    `SELECT t.career->>'title' AS title
+       FROM (SELECT results FROM career_quiz_results WHERE student_id = $1
+              ORDER BY created_at DESC, id DESC LIMIT 1) r,
+            jsonb_array_elements(r.results->'top_careers') WITH ORDINALITY AS t(career, n)
+      WHERE jsonb_typeof(t.career) = 'object'
+      ORDER BY t.n`,
+    [studentId]);
+  return rows.map(r => r.title).filter(Boolean);
+}
+
 // The student's newest `limit` runs, newest first.
 export async function findNewest(studentId, limit, db = defaultDb) {
   const { rows } = await db.query(
