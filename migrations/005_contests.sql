@@ -1,7 +1,7 @@
 -- Weekly contests and their 5 hand-authored questions (schema §5.1, §5.2).
 -- attempts and attempt_answers come with the student contest endpoints.
 
-CREATE TABLE contests (
+CREATE TABLE IF NOT EXISTS contests (
   id         integer     GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   opens_at   timestamptz NOT NULL,
   closes_at  timestamptz NOT NULL,
@@ -21,10 +21,10 @@ CREATE TABLE contests (
   CONSTRAINT contests_no_overlap
     EXCLUDE USING gist (tstzrange(opens_at, closes_at) WITH &&) WHERE (NOT is_deleted)
 );
-CREATE TRIGGER contests_updated_at BEFORE UPDATE ON contests
+CREATE OR REPLACE TRIGGER contests_updated_at BEFORE UPDATE ON contests
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
-CREATE TABLE contest_questions (
+CREATE TABLE IF NOT EXISTS contest_questions (
   id            text        PRIMARY KEY,
   contest_id    integer     NOT NULL REFERENCES contests (id) ON DELETE CASCADE,
   position      smallint    NOT NULL CHECK (position BETWEEN 1 AND 5),
@@ -42,12 +42,12 @@ CREATE TABLE contest_questions (
   -- Target for the composite FK from attempt_answers (§5.4).
   UNIQUE (contest_id, id)
 );
-CREATE TRIGGER contest_questions_updated_at BEFORE UPDATE ON contest_questions
+CREATE OR REPLACE TRIGGER contest_questions_updated_at BEFORE UPDATE ON contest_questions
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- Questions are locked once their contest opens (spec §3.2). The API checks
 -- first and answers 409 contest_locked; this is the backstop.
-CREATE FUNCTION contest_questions_lock() RETURNS trigger
+CREATE OR REPLACE FUNCTION contest_questions_lock() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
   IF EXISTS (SELECT 1 FROM contests
@@ -58,5 +58,5 @@ BEGIN
   END IF;
   RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
 END $$;
-CREATE TRIGGER contest_questions_lock BEFORE INSERT OR UPDATE OR DELETE ON contest_questions
+CREATE OR REPLACE TRIGGER contest_questions_lock BEFORE INSERT OR UPDATE OR DELETE ON contest_questions
   FOR EACH ROW EXECUTE FUNCTION contest_questions_lock();

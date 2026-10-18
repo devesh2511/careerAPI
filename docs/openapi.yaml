@@ -176,6 +176,52 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Ok' }
 
+  /auth/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Email a password-reset code
+      description: |
+        If the email belongs to an active student with a password login, emails them a 6-digit code
+        valid for 15 minutes, replacing any earlier code. A new code can be asked for at most once a
+        minute. Always answers `200`, so it can't be used to find out which emails have accounts.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '503': { description: '`email_failed`: the email provider rejected the message', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Set a new password with an emailed code
+      description: |
+        Trades the code from `forgot-password` for a new password. The code is single-use and allows
+        5 wrong guesses. On success every session of that student ends (and this browser's cookie
+        is cleared); log in again with the new password.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code, new_password]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string, pattern: '^\d{6}$', example: '042917' }
+                new_password: { type: string, format: password, minLength: 8, maxLength: 200 }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { description: '`invalid` (bad field) or `invalid_code` (wrong, used, expired or too many tries)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
   # ══════════════════════════════════════════════════════════════
   # ME
   # ══════════════════════════════════════════════════════════════

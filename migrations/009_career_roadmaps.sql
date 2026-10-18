@@ -2,7 +2,7 @@
 -- `career` matches the career titles in the frontend's riasec_careers.js
 -- (and students.current_career), so the page can open the student's top match.
 
-CREATE TABLE career_roadmaps (
+CREATE TABLE IF NOT EXISTS career_roadmaps (
   career     text        PRIMARY KEY CHECK (length(career) BETWEEN 1 AND 80),
   emoji      text,
   -- Ordered stages, Class 10 to first job:
@@ -40,4 +40,5 @@ INSERT INTO career_roadmaps (career, emoji, sort_order, steps) VALUES (
       "Top recruiters: Swiggy, Zomato, PhonePe, ThoughtWorks",
       "Senior Designer at ₹15–25 LPA in 4–5 years"]}
   ]'::jsonb
-);
+)
+ON CONFLICT (career) DO NOTHING;

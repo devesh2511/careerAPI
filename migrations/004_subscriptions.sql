@@ -2,7 +2,7 @@
 -- Payment records outlive the payer: hard-deleting a student or school
 -- clears its id here instead of deleting the row (GST record-keeping).
 
-CREATE TABLE subscriptions (
+CREATE TABLE IF NOT EXISTS subscriptions (
   id               bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   payer_type       text        NOT NULL CHECK (payer_type IN ('school', 'student')),
   school_id        integer     REFERENCES schools (id) ON DELETE SET NULL,
@@ -21,7 +21,7 @@ CREATE TABLE subscriptions (
   CHECK (ends_at > starts_at),
   UNIQUE (payment_provider, payment_ref)
 );
-CREATE INDEX subscriptions_school_idx ON subscriptions (school_id, ends_at) WHERE status = 'active';
-CREATE INDEX subscriptions_student_idx ON subscriptions (student_id, ends_at) WHERE status = 'active';
-CREATE TRIGGER subscriptions_updated_at BEFORE UPDATE ON subscriptions
+CREATE INDEX IF NOT EXISTS subscriptions_school_idx ON subscriptions (school_id, ends_at) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS subscriptions_student_idx ON subscriptions (student_id, ends_at) WHERE status = 'active';
+CREATE OR REPLACE TRIGGER subscriptions_updated_at BEFORE UPDATE ON subscriptions
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();

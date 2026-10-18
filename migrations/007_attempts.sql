@@ -1,6 +1,6 @@
 -- Students' contest attempts and their saved answers (schema §5.3, §5.4).
 
-CREATE TABLE attempts (
+CREATE TABLE IF NOT EXISTS attempts (
   id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   contest_id     integer     NOT NULL REFERENCES contests (id) ON DELETE CASCADE,
   student_id     uuid        NOT NULL REFERENCES students (id) ON DELETE CASCADE,
@@ -18,11 +18,11 @@ CREATE TABLE attempts (
   CHECK (submitted_at IS NULL OR submitted_at >= started_at),
   CHECK ((score IS NULL) = (correct IS NULL) AND (score IS NULL OR score = correct * 10))
 );
-CREATE INDEX attempts_ranking_idx ON attempts (contest_id, score DESC, time_taken_s)
+CREATE INDEX IF NOT EXISTS attempts_ranking_idx ON attempts (contest_id, score DESC, time_taken_s)
   WHERE submitted_at IS NOT NULL;
-CREATE INDEX attempts_student_id_idx ON attempts (student_id);
+CREATE INDEX IF NOT EXISTS attempts_student_id_idx ON attempts (student_id);
 
-CREATE TABLE attempt_answers (
+CREATE TABLE IF NOT EXISTS attempt_answers (
   attempt_id   uuid        NOT NULL,
   contest_id   integer     NOT NULL,
   question_id  text        NOT NULL,

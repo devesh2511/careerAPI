@@ -6,5 +6,5 @@
 -- (career_roadmaps.sort_order is no longer read; order comes from careers.)
 
 ALTER TABLE career_roadmaps
-  ADD COLUMN version    integer NOT NULL DEFAULT 1,
-  ADD COLUMN updated_by uuid    REFERENCES admins (id) ON DELETE SET NULL;
+  ADD COLUMN IF NOT EXISTS version    integer NOT NULL DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS updated_by uuid    REFERENCES admins (id) ON DELETE SET NULL;

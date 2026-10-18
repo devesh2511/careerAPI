@@ -139,3 +139,39 @@ export async function hardDelete(studentId, db = defaultDb) {
 export async function restore(studentId, db = defaultDb) {
   await db.query('UPDATE students SET is_deleted = false, deleted_at = NULL WHERE id = $1', [studentId]);
 }
+
+// ── Password reset ────────────────────────────────────────────────────────
+// Stores a new code unless one was issued less than cooldownSeconds ago.
+// false when held back by the cooldown.
+export async function upsertPasswordReset({ studentId, codeHash, lifetimeMinutes, cooldownSeconds }, db = defaultDb) {
+  const { rowCount } = await db.query(
+    `INSERT INTO student_password_resets (student_id, code_hash, expires_at)
+     VALUES ($1, $2, now() + make_interval(mins => $3))
+     ON CONFLICT (student_id) DO UPDATE
+       SET code_hash = EXCLUDED.code_hash, attempts = 0,
+           created_at = now(), expires_at = EXCLUDED.expires_at
+       WHERE student_password_resets.created_at < now() - make_interval(secs => $4)`,
+    [studentId, codeHash, lifetimeMinutes, cooldownSeconds]);
+  return rowCount > 0;
+}
+
+// The unexpired reset for a live student, by login email, locked for the check.
+export async function findPasswordReset(email, db = defaultDb) {
+  const { rows } = await db.query(
+    `SELECT r.student_id, r.code_hash, r.attempts
+       FROM student_password_resets r
+       JOIN students s ON s.id = r.student_id
+       JOIN auth_identities ai ON ai.student_id = s.id AND ai.provider = 'password'
+      WHERE ai.provider_subject = $1 AND NOT s.is_deleted AND r.expires_at > now()
+      FOR UPDATE OF r`,
+    [email]);
+  return rows[0] || null;
+}
+
+export async function countPasswordResetAttempt(studentId, db = defaultDb) {
+  await db.query('UPDATE student_password_resets SET attempts = attempts + 1 WHERE student_id = $1', [studentId]);
+}
+
+export async function deletePasswordReset(studentId, db = defaultDb) {
+  await db.query('DELETE FROM student_password_resets WHERE student_id = $1', [studentId]);
+}

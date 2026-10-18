@@ -30,4 +30,5 @@ INSERT INTO career_roadmaps (career, emoji, sort_order, steps) VALUES (
       "Top product companies pay ₹15–40 LPA to strong graduates",
       "Senior Software Engineer at ₹18–35 LPA in 4–5 years"]}
   ]'::jsonb
-);
+)
+ON CONFLICT (career) DO NOTHING;

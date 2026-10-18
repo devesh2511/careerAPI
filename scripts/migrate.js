@@ -1,6 +1,10 @@
 // Applies migrations/*.sql in filename order, each in its own transaction,
 // and records them in schema_migrations so each runs only once.
 //   npm run migrate
+// Every migration must still be idempotent, so re-running one is harmless:
+// CREATE ... IF NOT EXISTS / CREATE OR REPLACE, ADD COLUMN IF NOT EXISTS,
+// INSERT ... ON CONFLICT DO NOTHING, and a guard on anything else (UPDATEs,
+// ADD CONSTRAINT) so a second run changes nothing.
 import { readdirSync, readFileSync } from 'node:fs';
 import pg from 'pg';
 

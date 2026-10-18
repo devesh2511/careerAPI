@@ -1,6 +1,6 @@
 -- Schools and the student email list each school provides (schema §6.1, §6.2).
 
-CREATE TABLE schools (
+CREATE TABLE IF NOT EXISTS schools (
   id            integer     GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name          text        NOT NULL,
   school_code   text        NOT NULL UNIQUE CHECK (school_code ~ '^[A-Z0-9-]{3,20}$'),
@@ -19,10 +19,10 @@ CREATE TABLE schools (
   updated_at    timestamptz NOT NULL DEFAULT now(),
   CHECK (is_deleted = (deleted_at IS NOT NULL))
 );
-CREATE TRIGGER schools_updated_at BEFORE UPDATE ON schools
+CREATE OR REPLACE TRIGGER schools_updated_at BEFORE UPDATE ON schools
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
-CREATE TABLE school_roster (
+CREATE TABLE IF NOT EXISTS school_roster (
   id         bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   school_id  integer     NOT NULL REFERENCES schools (id) ON DELETE CASCADE,
   email      text        NOT NULL,
@@ -30,5 +30,5 @@ CREATE TABLE school_roster (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 -- An email can be on one school's list only.
-CREATE UNIQUE INDEX school_roster_email_key ON school_roster (lower(email));
-CREATE INDEX school_roster_school_id_idx ON school_roster (school_id);
+CREATE UNIQUE INDEX IF NOT EXISTS school_roster_email_key ON school_roster (lower(email));
+CREATE INDEX IF NOT EXISTS school_roster_school_id_idx ON school_roster (school_id);

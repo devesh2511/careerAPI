@@ -1,7 +1,7 @@
 -- Career quiz runs: only each student's latest 2 are kept (the API deletes
 -- older ones on save); the latest is shown on login (schema §4.2).
 
-CREATE TABLE career_quiz_results (
+CREATE TABLE IF NOT EXISTS career_quiz_results (
   id             bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   student_id     uuid        NOT NULL REFERENCES students (id) ON DELETE CASCADE,
   -- Rounded 0-100 per dimension, e.g. {"R":22,"I":35,"A":15,"S":5,"E":35,"C":23}.
@@ -17,4 +17,4 @@ CREATE TABLE career_quiz_results (
   engine_version text,
   created_at     timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX career_quiz_results_latest_idx ON career_quiz_results (student_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS career_quiz_results_latest_idx ON career_quiz_results (student_id, created_at DESC);

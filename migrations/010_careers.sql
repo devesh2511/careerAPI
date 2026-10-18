@@ -3,7 +3,7 @@
 -- scripts/riasec_careers.js (see that file's header for what each field
 -- means); the frontend loads it from GET /careers.
 
-CREATE TABLE careers (
+CREATE TABLE IF NOT EXISTS careers (
   title      text        PRIMARY KEY CHECK (length(title) BETWEEN 1 AND 80),
   emoji      text        NOT NULL,
   field      text        NOT NULL,
@@ -97,10 +97,16 @@ INSERT INTO careers (title, emoji, field, family, stream, salary, riasec, domain
   ('Defence Services Officer (Army / Navy / Air Force)', '🎖️', 'Defence', 'public-service', 'Any', '₹7–15 LPA (service scale)', '{"R":95,"I":60,"A":20,"S":75,"E":90,"C":85}'::jsonb, '["people","machines"]'::jsonb, '["maths","physics"]'::jsonb, 'Physical, practical leadership under real discipline and pressure.', 71),
   ('Public Sector Undertaking (PSU) Executive', '🏭', 'Public Sector', 'public-service', 'PCM / Commerce', '₹6–12 LPA starting', '{"R":55,"I":70,"A":20,"S":50,"E":70,"C":80}'::jsonb, '["machines","money"]'::jsonb, '["maths","physics","economics"]'::jsonb, 'Running the power plants, railways and oil companies the country depends on.', 72),
   ('Bank PO / RBI Grade B Officer', '🏦', 'Banking', 'public-service', 'Commerce', '₹4–10 LPA starting', '{"R":15,"I":50,"A":15,"S":80,"E":85,"C":95}'::jsonb, '["money","people"]'::jsonb, '["maths","economics","languages"]'::jsonb, 'Working with both people and paperwork, where both must be right.', 73),
-  ('Professor / Academic Researcher', '🎓', 'Higher Education', 'education', 'PCM / PCB / Arts', '₹5–14 LPA starting', '{"R":30,"I":95,"A":45,"S":80,"E":40,"C":70}'::jsonb, '["people"]'::jsonb, '[]'::jsonb, 'Doing original research and teaching what you find.', 74);
+  ('Professor / Academic Researcher', '🎓', 'Higher Education', 'education', 'PCM / PCB / Arts', '₹5–14 LPA starting', '{"R":30,"I":95,"A":45,"S":80,"E":40,"C":70}'::jsonb, '["people"]'::jsonb, '[]'::jsonb, 'Doing original research and teaching what you find.', 74)
+ON CONFLICT (title) DO NOTHING;
 
 -- A roadmap must belong to a career in the catalogue; renaming a career
 -- carries its roadmap along.
-ALTER TABLE career_roadmaps
-  ADD CONSTRAINT career_roadmaps_career_fkey
-  FOREIGN KEY (career) REFERENCES careers (title) ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'career_roadmaps_career_fkey') THEN
+    ALTER TABLE career_roadmaps
+      ADD CONSTRAINT career_roadmaps_career_fkey
+      FOREIGN KEY (career) REFERENCES careers (title) ON UPDATE CASCADE;
+  END IF;
+END $$;

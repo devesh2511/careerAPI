@@ -3,10 +3,13 @@
 -- family after Animator / VFX Artist, so later careers move down one place.
 -- The roadmap is also in career_roadmaps/product-designer.json.
 
-UPDATE careers SET sort_order = sort_order + 1 WHERE sort_order >= 65;
+-- Only on the first run: a second would move them down again.
+UPDATE careers SET sort_order = sort_order + 1
+ WHERE sort_order >= 65 AND NOT EXISTS (SELECT 1 FROM careers WHERE title = 'Product Designer');
 
 INSERT INTO careers (title, emoji, field, family, stream, salary, riasec, domains, subjects, why, sort_order) VALUES
-  ('Product Designer', '📐', 'Design + Product', 'design', 'Arts / PCM / Any', '₹5–12 LPA starting', '{"R":65,"I":65,"A":95,"S":50,"E":55,"C":45}'::jsonb, '["media","digital"]'::jsonb, '["arts","maths","computers"]'::jsonb, 'Deciding how an everyday product looks, feels and works, from a bottle to a phone app.', 65);
+  ('Product Designer', '📐', 'Design + Product', 'design', 'Arts / PCM / Any', '₹5–12 LPA starting', '{"R":65,"I":65,"A":95,"S":50,"E":55,"C":45}'::jsonb, '["media","digital"]'::jsonb, '["arts","maths","computers"]'::jsonb, 'Deciding how an everyday product looks, feels and works, from a bottle to a phone app.', 65)
+ON CONFLICT (title) DO NOTHING;
 
 INSERT INTO career_roadmaps (career, emoji, steps) VALUES (
   'Product Designer', '📐',
@@ -36,4 +39,5 @@ INSERT INTO career_roadmaps (career, emoji, steps) VALUES (
       "Top recruiters: Titan, Godrej, Tata Elxsi, Ather Energy, boAt, Flipkart, Swiggy",
       "Senior Product Designer at ₹15–30 LPA in 4–5 years"]}
   ]'::jsonb
-);
+)
+ON CONFLICT (career) DO NOTHING;
