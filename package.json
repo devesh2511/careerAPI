@@ -9,6 +9,8 @@
     "start": "node --env-file=.env src/server.js",
     "dev": "node --env-file=.env --watch src/server.js",
     "migrate": "node --env-file=.env scripts/migrate.js",
+    "vercel-build": "node scripts/vercel-build.js",
+    "prepare": "node -e \"try{require('child_process').execSync('git config core.hooksPath .githooks',{stdio:'ignore'})}catch(e){}\"",
     "seed-roadmaps": "node --env-file=.env scripts/seed-roadmaps.js",
     "roadmap-review": "node --env-file=.env scripts/build-roadmap-review.js",
     "create-admin": "node --env-file=.env scripts/create-admin.js",

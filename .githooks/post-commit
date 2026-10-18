@@ -1,0 +1,10 @@
+#!/bin/sh
+# Rebuilds career_roadmaps/roadmaps/review.html after every commit, so the
+# review page always matches the database and the roadmap files. Runs in the
+# background and never affects the commit; output goes to the log below.
+# Installed by `npm install` (package.json "prepare" sets core.hooksPath).
+cd "$(git rev-parse --show-toplevel)" || exit 0
+[ -f .env ] || exit 0
+mkdir -p career_roadmaps/roadmaps
+(npm run --silent roadmap-review > career_roadmaps/roadmaps/review.log 2>&1 &)
+exit 0
