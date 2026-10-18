@@ -13,6 +13,7 @@ import { meController } from './Controllers/me.controller.js';
 import { contestController } from './Controllers/contest.controller.js';
 import { roadmapController } from './Controllers/roadmap.controller.js';
 import { careerController } from './Controllers/career.controller.js';
+import { newsController } from './Controllers/news.controller.js';
 import { adminController } from './Controllers/admin.controller.js';
 
 const app = express();
@@ -29,6 +30,7 @@ app.use('/me', meController);
 app.use(contestController);
 app.use(roadmapController);
 app.use(careerController);
+app.use(newsController);
 app.use('/admin', adminController);
 // Last of the routes: it checks which spec endpoints the controllers above provide.
 connectSwagger(app);

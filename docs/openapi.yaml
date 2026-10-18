@@ -53,6 +53,8 @@ tags:
     description: The career catalogue the quiz matches against. Free.
   - name: Roadmap
     description: Career roadmaps, Class 10 to first job. Paid.
+  - name: Career Space
+    description: Live news, jobs, exams and scholarships for the student's career matches. Paid.
   - name: Admin auth
   - name: Admin · Overview
   - name: Admin · Contests
@@ -532,6 +534,35 @@ paths:
                 type: object
                 properties:
                   roadmap: { $ref: '#/components/schemas/Roadmap' }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402': { $ref: '#/components/responses/PaymentRequired' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ══════════════════════════════════════════════════════════════
+  # CAREER SPACE (paid)
+  # ══════════════════════════════════════════════════════════════
+  /career-news:
+    get:
+      tags: [Career Space]
+      summary: Latest news, jobs, exams and scholarships for one career
+      description: |
+        **Paid.** Headlines from every configured news provider (GNews when
+        `GNEWS_API_KEY` is set, Google News), merged, de-duplicated and newest
+        first. Each career's feed is cached for `NEWS_CACHE_HOURS` (default 6);
+        if every provider fails on a refresh, the last feed is returned.
+        Any career in the catalogue works, matched case-insensitively.
+      parameters:
+        - in: query
+          name: career
+          required: true
+          schema: { type: string, maxLength: 80, example: Robotics & Mechatronics Engineer }
+      responses:
+        '200':
+          description: Feed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CareerNews' }
         '400': { $ref: '#/components/responses/Invalid' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '402': { $ref: '#/components/responses/PaymentRequired' }
@@ -1660,6 +1691,44 @@ components:
           maxItems: 10
           items: { type: string, maxLength: 200 }
           example: [Focus on Physics, Maths, CS — target 85%+]
+
+    CareerNews:
+      type: object
+      description: One career's My Career Space feed, one list per tab.
+      properties:
+        career:
+          type: object
+          properties:
+            title: { type: string, example: Robotics & Mechatronics Engineer }
+            emoji: { type: string, example: 🤖 }
+        categories:
+          type: array
+          description: Always these four, in this order.
+          items:
+            type: object
+            properties:
+              key: { type: string, enum: [news, jobs, exams, scholarships] }
+              label: { type: string, example: Jobs & Internships }
+              items:
+                type: array
+                maxItems: 30
+                items: { $ref: '#/components/schemas/NewsItem' }
+        sources:
+          type: array
+          description: The providers that answered the last fetch.
+          items: { type: string }
+          example: [GNews, Google News]
+        updated_at: { type: string, format: date-time, description: When the feed was fetched. }
+
+    NewsItem:
+      type: object
+      properties:
+        title: { type: string, example: IIT Delhi opens applications for robotics programme }
+        url: { type: string, format: uri, description: Always http(s). Opens the publisher's page (Google News links redirect there). }
+        source: { type: [string, 'null'], example: The Times of India }
+        published_at: { type: [string, 'null'], format: date-time }
+        image: { type: [string, 'null'], format: uri, description: A thumbnail, when the provider has one. }
+        provider: { type: string, example: Google News }
 
     AdminRoadmapRow:
       type: object
