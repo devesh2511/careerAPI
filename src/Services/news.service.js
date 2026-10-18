@@ -1,6 +1,6 @@
 // My Career Space: the latest news, jobs, exams and scholarships for one
 // career, merged from every provider in news/providers/. A career's feed is
-// kept in career_news for NEWS_CACHE_HOURS (default 6), so most page views
+// kept in career_news for NEWS_CACHE_HOURS (default 12), so most page views
 // never reach a provider and the paid APIs' daily quotas last.
 import { ApiError } from '../DTO/ApiError.js';
 import { CareerNewsDTO } from '../DTO/CareerNewsDTO.js';
@@ -38,7 +38,7 @@ const TIMEOUT_MS = 6_000;
 // Headlines a Class 10 student shouldn't be shown alongside career advice.
 const BLOCKED = /\b(rape[ds]?|raping|murder(ed|s)?|suicides?|porn\w*|sex(ual)? (assault|abuse|harassment)|molest\w*|beheaded)\b/i;
 
-const cacheHours = () => Number(process.env.NEWS_CACHE_HOURS) || 6;
+const cacheHours = () => Number(process.env.NEWS_CACHE_HOURS) || 12;
 
 // GET /career-news?career=. req: CareerRequest.
 export async function getCareerNews(req) {

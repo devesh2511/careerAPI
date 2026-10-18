@@ -549,7 +549,7 @@ paths:
       description: |
         **Paid.** Headlines from every configured news provider (GNews when
         `GNEWS_API_KEY` is set, Google News), merged, de-duplicated and newest
-        first. Each career's feed is cached for `NEWS_CACHE_HOURS` (default 6);
+        first. Each career's feed is cached for `NEWS_CACHE_HOURS` (default 12);
         if every provider fails on a refresh, the last feed is returned.
         Any career in the catalogue works, matched case-insensitively.
       parameters:
