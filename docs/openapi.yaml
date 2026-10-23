@@ -55,6 +55,8 @@ tags:
     description: Career roadmaps, Class 10 to first job. Paid.
   - name: Career Space
     description: Live news, jobs, exams and scholarships for the student's career matches. Paid.
+  - name: Service
+    description: For trusted server-side callers. Bearer token, no cookie.
   - name: Admin auth
   - name: Admin · Overview
   - name: Admin · Contests
@@ -594,6 +596,55 @@ paths:
         '400': { $ref: '#/components/responses/Invalid' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '402': { $ref: '#/components/responses/PaymentRequired' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ══════════════════════════════════════════════════════════════
+  # SERVICE (bearer token)
+  # ══════════════════════════════════════════════════════════════
+  /userContext:
+    get:
+      tags: [Service]
+      summary: A student's profile, top career matches and contest scores
+      description: >-
+        Looked up by email (case-insensitive). Needs `Authorization: Bearer <USER_CONTEXT_TOKEN>`;
+        with that unset on the server every call is `401`. Not behind the paywall.
+        `top_careers` is the first 5 of the latest quiz run's `results.top_careers` ([] before the quiz);
+        `contest_scores` matches the rows of `GET /me/contest-history`.
+      security:
+        - serviceToken: []
+      parameters:
+        - in: query
+          name: email
+          required: true
+          schema: { type: string, format: email }
+      responses:
+        '200':
+          description: The student's context
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  email: { type: string }
+                  full_name: { type: string }
+                  current_career: { type: [string, 'null'] }
+                  profile: { oneOf: [{ $ref: '#/components/schemas/Profile' }, { type: 'null' }] }
+                  top_careers: { type: array, maxItems: 5, items: { type: object } }
+                  contest_scores:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        contest: { $ref: '#/components/schemas/Contest' }
+                        attempted: { type: boolean }
+                        score: { type: [integer, 'null'] }
+                        correct: { type: [integer, 'null'] }
+                        total_questions: { type: integer, const: 5 }
+                        time_taken_s: { type: [integer, 'null'] }
+                        global: { oneOf: [{ $ref: '#/components/schemas/Rank' }, { type: 'null' }] }
+                        career: { oneOf: [{ $ref: '#/components/schemas/Rank' }, { type: 'null' }] }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   # ══════════════════════════════════════════════════════════════
@@ -1560,6 +1611,10 @@ components:
       type: apiKey
       in: cookie
       name: careerai_admin_session
+    serviceToken:
+      type: http
+      scheme: bearer
+      description: The server's USER_CONTEXT_TOKEN
 
   headers:
     StudentCookie:

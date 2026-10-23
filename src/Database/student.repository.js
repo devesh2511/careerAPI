@@ -28,6 +28,14 @@ export async function findPasswordLogin(email, db = defaultDb) {
   return rows[0] || null;
 }
 
+// A live student by email (case-insensitive, as students_email_key is).
+// null when no such student or they're soft-deleted.
+export async function findLiveByEmail(email, db = defaultDb) {
+  const { rows } = await db.query(
+    'SELECT * FROM students WHERE lower(email) = lower($1) AND NOT is_deleted', [email]);
+  return rows[0] || null;
+}
+
 export async function touchLastLogin(identityId, db = defaultDb) {
   await db.query('UPDATE auth_identities SET last_login_at = now() WHERE id = $1', [identityId]);
 }
