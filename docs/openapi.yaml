@@ -268,15 +268,6 @@ paths:
                   student: { $ref: '#/components/schemas/Student' }
         '400': { $ref: '#/components/responses/Invalid' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
-    delete:
-      tags: [Me]
-      summary: Delete my account (soft delete)
-      description: |
-        Sets `is_deleted`, deletes all sessions and hides the student from
-        leaderboards. An admin can restore it. Payment records are kept.
-      responses:
-        '200': { $ref: '#/components/responses/Ok' }
-        '401': { $ref: '#/components/responses/Unauthenticated' }
 
   /me/access:
     get:
