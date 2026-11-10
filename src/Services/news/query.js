@@ -2,7 +2,11 @@
 // handed the same NewsQuery, so a new provider only has to format it:
 //   { terms: ['robotics', 'mechatronics'],   any of these (the career)
 //     topic: ['jobs', 'hiring'],             and any of these (the tab); may be empty
-//     days:  30 }                            published in the last `days` days
+//     days:  30,                             published in the last `days` days
+//     india: true,                           optional: narrow the search to India (only
+//                                            providers with `regional` are sent these)
+//     aboutIndia: true }                     optional: results are Indian anyway (exam names),
+//                                            so the search isn't narrowed or repeated
 // GNews and Google News both read OR, parentheses and "quoted phrases".
 // Keep queries to one AND of two OR groups: Google News quietly returns
 // almost nothing for deeper nesting like ((a b) OR c).

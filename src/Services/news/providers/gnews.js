@@ -25,6 +25,8 @@ function waitTurn(signal) {
 
 export const gnews = {
   name: 'GNews',
+  // Searches with country=in, so every result counts as an India story.
+  indiaOnly: true,
 
   enabled() { return !!process.env.GNEWS_API_KEY; },
 

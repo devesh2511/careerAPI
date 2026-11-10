@@ -9,6 +9,8 @@ import { activeProviders } from './news/providers/index.js';
 
 // The tabs, in order. queries(terms, career) → the NewsQuerys (news/query.js)
 // whose results fill the tab; each one is a request to every provider.
+// indiaPlaces: how many of the tab's places India stories get first
+// (default INDIA_PLACES).
 export const CATEGORIES = [
   {
     key: 'news', label: 'News & Trends',
@@ -20,11 +22,12 @@ export const CATEGORIES = [
   },
   {
     // Plus the career's entrance exams on their own: any "JEE Main" story
-    // is exam news for an engineering aspirant.
-    key: 'exams', label: 'Exams & Admissions',
+    // is exam news for an engineering aspirant. Another country's school
+    // exams are rarely any use to a student here, so fewer world places.
+    key: 'exams', label: 'Exams & Admissions', indiaPlaces: 25,
     queries: (terms, career) => [
       { terms, topic: ['exam', 'entrance', 'admission', 'admissions', 'counselling'], days: 30 },
-      ...(career.exam_terms && career.exam_terms.length ? [{ terms: career.exam_terms, topic: [], days: 30 }] : []),
+      ...(career.exam_terms && career.exam_terms.length ? [{ terms: career.exam_terms, topic: [], days: 30, aboutIndia: true }] : []),
     ],
   },
   {
@@ -34,6 +37,9 @@ export const CATEGORIES = [
 ];
 
 const PER_CATEGORY = 30;
+// Of a tab's places, up to this many go to India stories and the rest to
+// stories from anywhere; either side fills the places the other can't.
+const INDIA_PLACES = 20;
 const TIMEOUT_MS = 6_000;
 // Headlines a Class 10 student shouldn't be shown alongside career advice.
 const BLOCKED = /\b(rape[ds]?|raping|murder(ed|s)?|suicides?|porn\w*|sex(ual)? (assault|abuse|harassment)|molest\w*|beheaded)\b/i;
@@ -66,7 +72,9 @@ function refresh(career) {
   return inFlight.get(career.title);
 }
 
-// Asks every active provider every category's queries at once. → { feed, sources }
+// Asks every active provider every category's queries at once. Each query
+// runs twice, once narrowed to India (only for providers that can) and once
+// worldwide, unless its results are Indian anyway. → { feed, sources }
 export async function fetchFeed(career, providers = activeProviders()) {
   const terms = career.news_terms && career.news_terms.length ? career.news_terms : termsFromTitle(career.title);
   const answered = new Set();
@@ -74,15 +82,22 @@ export async function fetchFeed(career, providers = activeProviders()) {
   const search = (p, query, cat) => p.search(query, { signal: AbortSignal.timeout(TIMEOUT_MS) }).then(items => {
     answered.add(p.name);
     const named = mentions(query.terms);
-    return items.map(item => ({ ...item, provider: p.name, strong: named.test(item.title || '') }));
+    const indian = !!(query.india || query.aboutIndia || p.indiaOnly);
+    return items.map(item => ({
+      ...item, provider: p.name, strong: named.test(item.title || ''),
+      india: indian || indianSite(item.source_url),
+    }));
   }, err => {
     console.error(`news: ${p.name} failed for ${career.title} / ${cat.key}: ${err.message}`);
     return [];
   });
 
   const lists = await Promise.all(CATEGORIES.map(async cat => {
-    const results = await Promise.all(cat.queries(terms, career).flatMap(query => providers.map(p => search(p, query, cat))));
-    return [cat.key, merge(results)];
+    const queries = cat.queries(terms, career).flatMap(q => (q.aboutIndia ? [q] : [{ ...q, india: true }, q]));
+    const results = await Promise.all(queries.flatMap(query => providers
+      .filter(p => !query.india || p.regional)
+      .map(p => search(p, query, cat))));
+    return [cat.key, merge(results, cat.indiaPlaces || INDIA_PLACES)];
   }));
 
   return {
@@ -98,33 +113,57 @@ function mentions(terms) {
   return new RegExp(`\\b(${escaped.join('|')})`, 'i');
 }
 
+// Is this publisher's site Indian? Only a .in address is sure: .com ones
+// (ndtv.com, punchng.com) could be anywhere.
+function indianSite(url) {
+  try { return /\.in$/i.test(new URL(url).hostname); } catch { return false; }
+}
+
 // lists: one result list per (query, provider), items marked `strong` when
-// the headline names the query's terms. Strong items fill the tab first, the
-// rest only the places left over. Within each pass it takes from every list
-// in turn, so a query with lots of hits can't crowd out the others. Skips
-// unusable and blocked items and repeats (the same story from two
-// providers, or syndicated under one headline). → up to PER_CATEGORY, newest first.
-function merge(lists) {
+// the headline names the query's terms and `india` when they're Indian news.
+// Up to indiaPlaces places go to India stories and the rest to the others;
+// either side fills what the other can't. On each side strong items come
+// first, the rest only get the places left over, and every list is taken
+// from in turn, so a query with lots of hits can't crowd out the others.
+// Skips unusable and blocked items and repeats (the same story from two
+// providers or searches, or syndicated under one headline); a story any
+// search marked India counts as India. → up to PER_CATEGORY, newest first.
+function merge(lists, indiaPlaces) {
   const byDate = (a, b) => (b.published_at || '').localeCompare(a.published_at || '');
+  const keyOf = item => item.title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().slice(0, 80);
   const usable = lists.map(list => list
     .filter(item => item.title && /^https?:\/\//i.test(item.url || '') && !BLOCKED.test(item.title))
     .sort(byDate));
-  const seen = new Set(), out = [];
+  const indian = new Set(usable.flat().filter(item => item.india).map(keyOf));
+
+  // Every story once, best first.
+  const seen = new Set(), ranked = [];
   for (const strong of [true, false]) {
     const queues = usable.map(list => list.filter(item => item.strong === strong));
-    for (let i = 0; out.length < PER_CATEGORY && queues.some(q => i < q.length); i++) {
+    for (let i = 0; queues.some(q => i < q.length); i++) {
       for (const q of queues) {
         const item = q[i];
-        if (!item || out.length >= PER_CATEGORY) continue;
-        const key = item.title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().slice(0, 80);
+        if (!item) continue;
+        const key = keyOf(item);
         if (seen.has(key)) continue;
         seen.add(key);
-        const { strong: _, ...kept } = item;
-        out.push(kept);
+        ranked.push({ item, india: indian.has(key) });
       }
     }
   }
-  return out.sort(byDate);
+
+  const picked = new Set([
+    ...ranked.filter(r => r.india).slice(0, indiaPlaces),
+    ...ranked.filter(r => !r.india).slice(0, PER_CATEGORY - indiaPlaces),
+  ]);
+  for (const r of ranked) {
+    if (picked.size >= PER_CATEGORY) break;
+    picked.add(r);
+  }
+  // strong, india and source_url are only for picking; the feed doesn't keep them.
+  return [...picked]
+    .map(({ item: { strong: _s, india: _i, source_url: _u, ...kept } }) => kept)
+    .sort(byDate);
 }
 
 // For a career with no news_terms: "Drone Technology Specialist" → ["Drone Technology"],

@@ -570,7 +570,9 @@ paths:
       description: |
         **Paid.** Headlines from every configured news provider (GNews when
         `GNEWS_API_KEY` is set, Google News), merged, de-duplicated and newest
-        first. Each career's feed is cached for `NEWS_CACHE_HOURS` (default 12);
+        first. India comes first: up to 20 of a tab's 30 places (25 in exams)
+        go to Indian stories and the rest to stories from anywhere, either
+        side filling what the other can't. Each career's feed is cached for `NEWS_CACHE_HOURS` (default 12);
         if every provider fails on a refresh, the last feed is returned.
         Any career in the catalogue works, matched case-insensitively.
       parameters:

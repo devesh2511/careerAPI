@@ -6,12 +6,15 @@ import { searchString } from '../query.js';
 
 export const googleNewsRss = {
   name: 'Google News',
+  // Understands NewsQuery.india: the India edition alone still returns
+  // stories from everywhere, so the word India is added to the search.
+  regional: true,
 
   enabled() { return true; },
 
   async search(q, { signal }) {
     const params = new URLSearchParams({
-      q: `${searchString(q)} when:${q.days}d`,
+      q: `${searchString(q)}${q.india ? ' India' : ''} when:${q.days}d`,
       hl: 'en-IN', gl: 'IN', ceid: 'IN:en',
     });
     const res = await fetch(`https://news.google.com/rss/search?${params}`, { signal });
@@ -30,10 +33,14 @@ function parseItems(xml) {
     // Titles end in " - Publisher", which the card shows separately.
     if (source && title.endsWith(` - ${source}`)) title = title.slice(0, -(source.length + 3));
     const date = new Date(tag(item, 'pubDate'));
+    // The publisher's site, e.g. https://www.ndtv.com: news.service uses it
+    // to tell Indian publishers (.in) apart. It isn't sent to the app.
+    const sourceUrl = (item.match(/<source\s[^>]*url="([^"]*)"/) || [])[1] || '';
     items.push({
       title,
       url: tag(item, 'link'),
       source,
+      source_url: decodeEntities(sourceUrl),
       published_at: isNaN(date) ? null : date.toISOString(),
       image: null,
     });
