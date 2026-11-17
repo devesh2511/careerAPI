@@ -1,5 +1,5 @@
 // A student's context for trusted server-side callers (docs/openapi.yaml → Service).
-//   GET /userContext?email=
+//   GET /userContext?username=
 // No cookie: the caller sends Authorization: Bearer <USER_CONTEXT_TOKEN>.
 // With USER_CONTEXT_TOKEN unset every call is refused.
 import { Router } from 'express';

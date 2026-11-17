@@ -10,15 +10,16 @@ const TOP_CAREERS = 5;
 
 // req: UserContextRequest.
 export async function userContext(req) {
-  const student = await students.findLiveByEmail(req.email);
+  const student = await students.findLiveByUsername(req.username);
   if (!student) throw ApiError.notFound('student');
   const [{ profile }, { result }, contests] = await Promise.all([
     getProfile(student.id), latestRun(student.id), history(student),
   ]);
   const careers = Array.isArray(result?.results?.top_careers) ? result.results.top_careers : [];
   return {
+    username: student.username,
     email: student.email,
-    full_name: student.full_name,
+    full_name: student.name,
     //current_career: student.current_career,
     profile,
     top_careers: careers.slice(0, TOP_CAREERS),

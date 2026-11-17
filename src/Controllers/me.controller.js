@@ -1,6 +1,6 @@
-// The logged-in student (docs/openapi.yaml → Me). GET /me, /me/access and
-// PUT /me/school are free: the paywall needs them before the student has access.
-//   GET /me   PUT /me   GET /me/access   PUT /me/school
+// The logged-in student (docs/openapi.yaml → Me). GET /me, PUT /me and
+// GET /me/access are free: the paywall needs them before the student has access.
+//   GET /me   PUT /me   GET /me/access
 //   GET /me/profile (paid)   PUT /me/profile (paid)
 //   PUT /me/career (paid)   GET /me/contest-history (paid)
 //   POST /me/career-quiz (paid)   GET /me/career-quiz/latest (paid)
@@ -9,11 +9,10 @@ import { Router } from 'express';
 import { requireStudent, requireAccess } from './session.cookie.js';
 import { CareerRequest } from '../DTO/contest.requests.js';
 import { CareerQuizRequest } from '../DTO/quiz.requests.js';
-import { SchoolCodeRequest } from '../DTO/auth.requests.js';
-import { NameRequest, ProfileRequest } from '../DTO/profile.requests.js';
+import { AccountRequest, ProfileRequest } from '../DTO/profile.requests.js';
 import { accessFor } from '../Services/access.service.js';
 import {
-  toStudentDTO, setCareer, setSchool, setName, getProfile, saveProfile,
+  toStudentDTO, setCareer, setDetails, getProfile, saveProfile,
 } from '../Services/student.service.js';
 import { history } from '../Services/contest.service.js';
 import { saveRun, latestRun, savedRuns } from '../Services/quiz.service.js';
@@ -25,9 +24,11 @@ meController.get('/', async (req, res) => {
   res.json({ student: await toStudentDTO(req.student) });
 });
 
-// Free like GET /me: it's the student's own name.
+// Free like GET /me: email, class, board and city. Registration and adding a
+// second institute end on this form, before the student may have access.
+// Name and phone can't change: they are how institutes' lists find the student.
 meController.put('/', async (req, res) => {
-  res.json({ student: await setName(req.student.id, new NameRequest(req.body)) });
+  res.json({ student: await setDetails(req.student.id, new AccountRequest(req.body)) });
 });
 
 meController.get('/profile', requireAccess, async (req, res) => {
@@ -40,10 +41,6 @@ meController.put('/profile', requireAccess, async (req, res) => {
 
 meController.get('/access', async (req, res) => {
   res.json(await accessFor(req.student.id));
-});
-
-meController.put('/school', async (req, res) => {
-  res.json(await setSchool(req.student.id, new SchoolCodeRequest(req.body)));
 });
 
 // Career leaderboards group by this (contest spec §4.8).

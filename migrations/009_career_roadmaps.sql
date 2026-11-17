@@ -1,6 +1,6 @@
 -- Career roadmaps: the timeline on app.html#/roadmap, one row per career.
 -- `career` matches the career titles in the frontend's riasec_careers.js
--- (and students.current_career), so the page can open the student's top match.
+-- (and user_metadata.current_career), so the page can open the student's top match.
 
 CREATE TABLE IF NOT EXISTS career_roadmaps (
   career     text        PRIMARY KEY CHECK (length(career) BETWEEN 1 AND 80),

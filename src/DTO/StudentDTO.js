@@ -1,12 +1,23 @@
-// The Student object in docs/openapi.yaml. Only ever sent to the student
-// themself (or an admin), so it may include the email.
+// The Student object in docs/openapi.yaml: a user_metadata row. Only ever
+// sent to the student themself (or an admin), so it may include the phone
+// and email.
 export class StudentDTO {
-  constructor(row, school) {
+  constructor(row, institute) {
     this.id = row.id;
-    this.full_name = row.full_name;
-    this.leaderboard_name = StudentDTO.leaderboardName(row.full_name);
+    this.username = row.username;
+    this.full_name = row.name;
+    this.leaderboard_name = StudentDTO.leaderboardName(row.name);
+    this.phone_no = row.phone_no;
     this.email = row.email;
-    this.school = school ? { name: school.name, school_code: school.school_code } : null;
+    this.email_verified = Boolean(row.email_verified_at);
+    // Their school when they're on a school's list, else the first institute
+    // they registered through.
+    this.institute = institute
+      ? { name: institute.name, institute_code: institute.institute_code, type: institute.type }
+      : null;
+    this.class = row.class;
+    this.board = row.board;
+    this.city = row.city;
     this.current_career = row.current_career;
     this.created_at = row.created_at;
   }

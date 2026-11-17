@@ -1,14 +1,12 @@
 -- The student's onboarding answers (docs/openapi.yaml → Profile), one row
--- per student. GET /me/profile returns null until the row exists; PUT
--- /me/profile creates it (class is the only required answer) and later
--- saves fill in the rest. Settings edits class, board and city here too.
+-- per student. class, board and city are asked at registration and live on
+-- user_metadata; GET /me/profile returns them together with these. PUT
+-- /me/profile creates the row on the first answer and later saves fill in
+-- the rest.
 
 CREATE TABLE IF NOT EXISTS student_profiles (
-  student_id         uuid        PRIMARY KEY REFERENCES students (id) ON DELETE CASCADE,
-  class              smallint    NOT NULL CHECK (class IN (9, 10)),
-  board              text        CHECK (board IN ('CBSE', 'ICSE', 'State Board')),
+  student_id         integer     PRIMARY KEY REFERENCES user_metadata (id) ON DELETE CASCADE,
   medium             text        CHECK (medium IN ('English', 'Hindi', 'Regional Language')),
-  city               text        CHECK (length(city) BETWEEN 1 AND 80),
   -- {"Mathematics": 87, "Science": 79}, each 0-100.
   marks              jsonb       CHECK (jsonb_typeof(marks) = 'object'),
   favourite_subjects jsonb       CHECK (jsonb_typeof(favourite_subjects) = 'array'),

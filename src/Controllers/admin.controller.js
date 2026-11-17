@@ -2,18 +2,18 @@
 //   POST /admin/auth/login   POST /admin/auth/logout   GET /admin/me
 //   POST /admin/auth/forgot-password   POST /admin/auth/reset-password
 //   GET  /admin/overview
-//   /admin/contests/*  /admin/schools/*  /admin/students/*  /admin/admins/*
+//   /admin/contests/*  /admin/institutes/*  /admin/students/*  /admin/admins/*
 //   /admin/roadmaps    /admin/roadmap?career=
 // Everything but /admin/auth/* needs an admin session.
 import { Router } from 'express';
-import { LoginRequest, ForgotPasswordRequest, ResetPasswordRequest } from '../DTO/auth.requests.js';
+import { AdminLoginRequest, AdminForgotPasswordRequest, AdminResetPasswordRequest } from '../DTO/admin.requests.js';
 import { AdminRefDTO } from '../DTO/AdminDTO.js';
 import * as adminAuth from '../Services/admin.auth.service.js';
 import * as adminPassword from '../Services/admin.password.service.js';
 import { overview } from '../Services/admin.overview.service.js';
 import { setAdminCookie, clearAdminCookie, readAdminCookie, requireAdmin } from './admin.cookie.js';
 import { adminContestsController } from './admin.contests.controller.js';
-import { adminSchoolsController } from './admin.schools.controller.js';
+import { adminInstitutesController } from './admin.institutes.controller.js';
 import { adminStudentsController } from './admin.students.controller.js';
 import { adminAdminsController } from './admin.admins.controller.js';
 import { adminRoadmapsController } from './admin.roadmaps.controller.js';
@@ -21,7 +21,7 @@ import { adminRoadmapsController } from './admin.roadmaps.controller.js';
 export const adminController = Router();
 
 adminController.post('/auth/login', async (req, res) => {
-  const { token, body } = await adminAuth.login(new LoginRequest(req.body), req.get('user-agent'));
+  const { token, body } = await adminAuth.login(new AdminLoginRequest(req.body), req.get('user-agent'));
   setAdminCookie(res, token);
   res.json(body);
 });
@@ -34,12 +34,12 @@ adminController.post('/auth/logout', async (req, res) => {
 
 // Always 200, whether or not the email is an admin's.
 adminController.post('/auth/forgot-password', async (req, res) => {
-  await adminPassword.requestReset(new ForgotPasswordRequest(req.body));
+  await adminPassword.requestReset(new AdminForgotPasswordRequest(req.body));
   res.json({ ok: true });
 });
 
 adminController.post('/auth/reset-password', async (req, res) => {
-  await adminPassword.resetPassword(new ResetPasswordRequest(req.body));
+  await adminPassword.resetPassword(new AdminResetPasswordRequest(req.body));
   clearAdminCookie(res);
   res.json({ ok: true });
 });
@@ -53,7 +53,7 @@ adminController.get('/overview', requireAdmin, async (_req, res) => {
 });
 
 adminController.use('/contests', requireAdmin, adminContestsController);
-adminController.use('/schools', requireAdmin, adminSchoolsController);
+adminController.use('/institutes', requireAdmin, adminInstitutesController);
 adminController.use('/students', requireAdmin, adminStudentsController);
 adminController.use('/admins', requireAdmin, adminAdminsController);
 // /admin/roadmaps and /admin/roadmap?career= (each route checks the session).

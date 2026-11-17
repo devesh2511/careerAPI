@@ -38,7 +38,7 @@ export function readCookie(req, name) {
   return null;
 }
 
-// Sets req.student (a students row) or answers 401.
+// Sets req.student (a user_metadata row, without the password hash) or answers 401.
 export async function requireStudent(req, res, next) {
   const token = readSessionCookie(req);
   const session = await resolveSession(token);

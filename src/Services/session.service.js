@@ -31,7 +31,8 @@ export async function resolveSession(token) {
   const hash = sha256(token);
   const row = await sessions.findStudentBySession(hash);
   if (!row) return null;
-  const { last_seen_at, ...student } = row;
+  // The password hash never leaves the auth services.
+  const { last_seen_at, password, ...student } = row;
   const extended = Date.now() - last_seen_at.getTime() > EXTEND_AFTER_MS;
   if (extended) await sessions.extendSession(hash, LIFETIME_DAYS);
   return { student, extended };

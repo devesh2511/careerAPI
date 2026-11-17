@@ -3,7 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS career_quiz_results (
   id             bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  student_id     uuid        NOT NULL REFERENCES students (id) ON DELETE CASCADE,
+  student_id     integer     NOT NULL REFERENCES user_metadata (id) ON DELETE CASCADE,
   -- Rounded 0-100 per dimension, e.g. {"R":22,"I":35,"A":15,"S":5,"E":35,"C":23}.
   riasec_pct     jsonb       NOT NULL CHECK (jsonb_typeof(riasec_pct) = 'object'),
   riasec_code    text        NOT NULL CHECK (riasec_code ~ '^[RIASEC]{1,3}$'),

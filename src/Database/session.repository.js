@@ -1,4 +1,4 @@
-// Queries on sessions. Only SHA-256 hashes of tokens are ever stored.
+// Queries on sessions (student_id = user_metadata.id). Only SHA-256 hashes of tokens are ever stored.
 import { db as defaultDb } from './db.js';
 
 export async function insertSession({ tokenHash, studentId, lifetimeDays, userAgent }, db = defaultDb) {
@@ -15,9 +15,9 @@ export async function deleteSession(tokenHash, db = defaultDb) {
 // The live student behind an unexpired session, plus when it was last used.
 export async function findStudentBySession(tokenHash, db = defaultDb) {
   const { rows } = await db.query(
-    `SELECT s.*, se.last_seen_at
-       FROM sessions se JOIN students s ON s.id = se.student_id
-      WHERE se.token_hash = $1 AND se.expires_at > now() AND NOT s.is_deleted`,
+    `SELECT m.*, se.last_seen_at
+       FROM sessions se JOIN user_metadata m ON m.id = se.student_id
+      WHERE se.token_hash = $1 AND se.expires_at > now() AND NOT m.is_deleted`,
     [tokenHash]);
   return rows[0] || null;
 }

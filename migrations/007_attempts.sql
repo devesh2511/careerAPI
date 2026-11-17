@@ -3,7 +3,7 @@
 CREATE TABLE IF NOT EXISTS attempts (
   id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   contest_id     integer     NOT NULL REFERENCES contests (id) ON DELETE CASCADE,
-  student_id     uuid        NOT NULL REFERENCES students (id) ON DELETE CASCADE,
+  student_id     integer     NOT NULL REFERENCES user_metadata (id) ON DELETE CASCADE,
   started_at     timestamptz NOT NULL DEFAULT now(),
   submitted_at   timestamptz,
   auto_submitted boolean     NOT NULL DEFAULT false,

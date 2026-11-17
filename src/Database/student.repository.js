@@ -1,49 +1,49 @@
-// Queries on students and auth_identities.
+// Queries on user_metadata: student accounts. A student is the person on
+// one or more institute lists ("user" rows pointing here); this row is their
+// login, details and app state.
 import { db as defaultDb } from './db.js';
 
-// Inserts a student. A duplicate email surfaces as Postgres error 23505 on
-// the students_email_key index; the service turns that into email_taken.
-export async function insertStudent({ email, fullName, schoolId }, db = defaultDb) {
+// A duplicate surfaces as 23505 on user_metadata_username_key (username
+// taken) or user_metadata_person_key (this person already has an account).
+export async function insertStudent(s, db = defaultDb) {
   const { rows } = await db.query(
-    'INSERT INTO students (email, full_name, school_id) VALUES ($1, $2, $3) RETURNING *',
-    [email, fullName, schoolId]);
+    `INSERT INTO user_metadata (username, name, phone_no, email, password, city, class, board, last_login_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now()) RETURNING *`,
+    [s.username, s.name, s.phoneNo, s.email, s.passwordHash, s.city, s.class, s.board]);
   return rows[0];
 }
 
-export async function insertPasswordIdentity({ studentId, email, passwordHash }, db = defaultDb) {
-  await db.query(
-    `INSERT INTO auth_identities (student_id, provider, provider_subject, password_hash, last_login_at)
-     VALUES ($1, 'password', $2, $3, now())`,
-    [studentId, email, passwordHash]);
-}
-
-// The student behind a password login, deleted or not (the service decides),
-// with the identity's id and hash. null when no such email.
-export async function findPasswordLogin(email, db = defaultDb) {
+// The account of this person (name ignoring case + phone), deleted or not.
+export async function findByPerson({ name, phoneNo }, db = defaultDb) {
   const { rows } = await db.query(
-    `SELECT s.*, ai.id AS identity_id, ai.password_hash
-       FROM auth_identities ai JOIN students s ON s.id = ai.student_id
-      WHERE ai.provider = 'password' AND ai.provider_subject = $1`,
-    [email]);
+    'SELECT * FROM user_metadata WHERE phone_no = $1 AND lower(name) = lower($2)', [phoneNo, name]);
   return rows[0] || null;
 }
 
-// A live student by email (case-insensitive, as students_email_key is).
-// null when no such student or they're soft-deleted.
-export async function findLiveByEmail(email, db = defaultDb) {
-  const { rows } = await db.query(
-    'SELECT * FROM students WHERE lower(email) = lower($1) AND NOT is_deleted', [email]);
+// By username, deleted or not (the service decides). null when no such username.
+export async function findByUsername(username, db = defaultDb) {
+  const { rows } = await db.query('SELECT * FROM user_metadata WHERE username = $1', [username]);
   return rows[0] || null;
 }
 
-export async function touchLastLogin(identityId, db = defaultDb) {
-  await db.query('UPDATE auth_identities SET last_login_at = now() WHERE id = $1', [identityId]);
+export async function findLiveByUsername(username, db = defaultDb) {
+  const { rows } = await db.query('SELECT * FROM user_metadata WHERE username = $1 AND NOT is_deleted', [username]);
+  return rows[0] || null;
+}
+
+export async function findById(studentId, db = defaultDb) {
+  const { rows } = await db.query('SELECT * FROM user_metadata WHERE id = $1', [studentId]);
+  return rows[0] || null;
+}
+
+export async function touchLastLogin(studentId, db = defaultDb) {
+  await db.query('UPDATE user_metadata SET last_login_at = now() WHERE id = $1', [studentId]);
 }
 
 // PUT /me/career. career_updated_at only moves when the career changes.
 export async function setCareer(studentId, career, db = defaultDb) {
   const { rows } = await db.query(
-    `UPDATE students
+    `UPDATE user_metadata
         SET career_updated_at = CASE WHEN current_career IS DISTINCT FROM $2 THEN now() ELSE career_updated_at END,
             current_career = $2
       WHERE id = $1 RETURNING *`,
@@ -51,142 +51,157 @@ export async function setCareer(studentId, career, db = defaultDb) {
   return rows[0];
 }
 
-// PUT /me. leaderboard_name is derived from this, so it changes too.
-export async function setName(studentId, fullName, db = defaultDb) {
-  const { rows } = await db.query(
-    'UPDATE students SET full_name = $2 WHERE id = $1 RETURNING *', [studentId, fullName]);
+// PUT /me and the class/board/city part of PUT /me/profile. Only the given
+// keys change; a changed email is unverified again.
+export async function setDetails(studentId, d, db = defaultDb) {
+  const sets = [], params = [studentId];
+  for (const col of ['city', 'class', 'board']) {
+    if (col in d) { params.push(d[col]); sets.push(`${col} = $${params.length}`); }
+  }
+  if ('email' in d) {
+    params.push(d.email);
+    const p = `$${params.length}`;
+    sets.push(`email_verified_at = CASE WHEN email IS NOT DISTINCT FROM ${p} THEN email_verified_at END`, `email = ${p}`);
+  }
+  if (!sets.length) return findById(studentId, db);
+  const { rows } = await db.query(`UPDATE user_metadata SET ${sets.join(', ')} WHERE id = $1 RETURNING *`, params);
   return rows[0];
 }
 
-// For the access check (schema §6.4): the student's school, whether their
-// email is on its list, and the best active individual and school plans.
-// Selected alongside students s LEFT JOIN schools sc (ACCESS_FROM).
+// Re-picks the institute each account shows: its school when it's on a
+// school's list, else the first institute it registered through, else none.
+export async function refreshInstitutes(studentIds, db = defaultDb) {
+  if (!studentIds.length) return;
+  await db.query(
+    `UPDATE user_metadata m
+        SET institute_id = p.id, institute_code = p.institute_code
+       FROM (SELECT ids.id AS student_id, pick.id, pick.institute_code
+               FROM unnest($1::int[]) AS ids (id)
+               LEFT JOIN LATERAL (
+                 SELECT i.id, i.institute_code
+                   FROM "user" u JOIN institute i ON i.id = u.institute_id AND NOT i.is_deleted
+                  WHERE u.metadata_id = ids.id
+                  ORDER BY i.type = 'school' DESC, u.registered_at, i.id
+                  LIMIT 1) pick ON true) p
+      WHERE m.id = p.student_id
+        AND (m.institute_id IS DISTINCT FROM p.id OR m.institute_code IS DISTINCT FROM p.institute_code)`,
+    [studentIds]);
+}
+
+// For the access check: the institute the account shows, and the latest-
+// ending subscription covering now on any list the student is on (from a
+// live, active institute).
+// Selected alongside user_metadata m LEFT JOIN institute i (ACCESS_FROM).
 const ACCESS_FACTS = `
-            s.school_id,
-            sc.name, sc.school_code,
-            sc.status = 'active' AS school_live,
-            EXISTS (SELECT 1 FROM school_roster r
-                     WHERE r.school_id = s.school_id AND lower(r.email) = lower(s.email)) AS on_roster,
+            i.name AS institute_name, i.type AS institute_type,
             (SELECT row_to_json(x) FROM (
-               SELECT plan, ends_at FROM subscriptions
-                WHERE student_id = s.id AND status = 'active'
-                  AND now() >= starts_at AND now() < ends_at
-                ORDER BY ends_at DESC LIMIT 1) x) AS own_plan,
-            (SELECT row_to_json(x) FROM (
-               SELECT plan, ends_at FROM subscriptions
-                WHERE school_id = s.school_id AND status = 'active'
-                  AND now() >= starts_at AND now() < ends_at
-                ORDER BY ends_at DESC LIMIT 1) x) AS school_plan`;
-const ACCESS_FROM = 'students s LEFT JOIN schools sc ON sc.id = s.school_id AND NOT sc.is_deleted';
+               SELECT s.ends_at, li.name, li.institute_code
+                 FROM "user" u
+                 JOIN subscription s ON s.id = u.subscription_id
+                 JOIN institute li ON li.id = u.institute_id AND li.status = 'active' AND NOT li.is_deleted
+                WHERE u.metadata_id = m.id AND now() >= s.starts_at AND now() < s.ends_at
+                ORDER BY s.ends_at DESC LIMIT 1) x) AS plan`;
+const ACCESS_FROM = 'user_metadata m LEFT JOIN institute i ON i.id = m.institute_id AND NOT i.is_deleted';
 
 export async function findAccessFacts(studentId, db = defaultDb) {
-  const { rows } = await db.query(`SELECT ${ACCESS_FACTS} FROM ${ACCESS_FROM} WHERE s.id = $1`, [studentId]);
+  const { rows } = await db.query(
+    `SELECT m.institute_code, ${ACCESS_FACTS} FROM ${ACCESS_FROM} WHERE m.id = $1`, [studentId]);
   return rows[0] || null;
 }
 
 // ── Admin panel ───────────────────────────────────────────────────────────
-// A–Z, each student row with its access facts. pattern is an ILIKE pattern
-// on name or email ('' for all).
+// A–Z, each account with its access facts. pattern is an ILIKE pattern on
+// name, username, phone or email ('' for all).
 export async function listForAdmin({ deleted, pattern }, db = defaultDb) {
   const { rows } = await db.query(
-    `SELECT s.*, ${ACCESS_FACTS} FROM ${ACCESS_FROM}
-      WHERE s.is_deleted = $1 AND ($2 = '' OR s.full_name ILIKE $2 OR s.email ILIKE $2)
-      ORDER BY s.full_name, s.email`,
+    `SELECT m.*, ${ACCESS_FACTS} FROM ${ACCESS_FROM}
+      WHERE m.is_deleted = $1
+        AND ($2 = '' OR m.name ILIKE $2 OR m.username ILIKE $2 OR m.phone_no ILIKE $2 OR m.email ILIKE $2)
+      ORDER BY m.name, m.username`,
     [deleted, pattern]);
   return rows;
 }
 
-// Live students, how many have access, and how many through their school —
-// the access check (schema §6.4) for everyone at once. A student covered both
-// ways counts as via school, as accessFor() reports it.
+// Live accounts and how many have access.
 export async function countAccess(db = defaultDb) {
   const { rows } = await db.query(
-    `WITH f AS (SELECT ${ACCESS_FACTS} FROM ${ACCESS_FROM} WHERE NOT s.is_deleted),
-          a AS (SELECT coalesce(name IS NOT NULL AND school_live AND on_roster AND school_plan IS NOT NULL, false) AS via_school,
-                       own_plan IS NOT NULL AS own FROM f)
+    `WITH f AS (SELECT ${ACCESS_FACTS} FROM ${ACCESS_FROM} WHERE NOT m.is_deleted)
      SELECT count(*)::int AS students,
-            count(*) FILTER (WHERE via_school OR own)::int AS students_with_access,
-            count(*) FILTER (WHERE via_school)::int AS students_via_school
-       FROM a`);
+            count(*) FILTER (WHERE plan IS NOT NULL)::int AS students_with_access
+       FROM f`);
   return rows[0];
 }
 
-// One student with their access facts, deleted or not. null when no such id.
+// One account with its access facts, deleted or not. null when no such id.
 export async function findForAdmin(studentId, db = defaultDb) {
-  const { rows } = await db.query(`SELECT s.*, ${ACCESS_FACTS} FROM ${ACCESS_FROM} WHERE s.id = $1`, [studentId]);
+  const { rows } = await db.query(`SELECT m.*, ${ACCESS_FACTS} FROM ${ACCESS_FROM} WHERE m.id = $1`, [studentId]);
   return rows[0] || null;
 }
 
-// PUT /me/school; null clears it.
-export async function setSchool(studentId, schoolId, db = defaultDb) {
-  const { rows } = await db.query('UPDATE students SET school_id = $2 WHERE id = $1 RETURNING *', [studentId, schoolId]);
-  return rows[0];
-}
-
 export async function exists(studentId, db = defaultDb) {
-  const { rows } = await db.query('SELECT 1 FROM students WHERE id = $1', [studentId]);
+  const { rows } = await db.query('SELECT 1 FROM user_metadata WHERE id = $1', [studentId]);
   return rows.length > 0;
 }
 
 // Soft delete also ends every session of that student (schema §7).
 export async function softDelete(studentId, db = defaultDb) {
   await db.query(
-    'UPDATE students SET is_deleted = true, deleted_at = coalesce(deleted_at, now()) WHERE id = $1', [studentId]);
+    'UPDATE user_metadata SET is_deleted = true, deleted_at = coalesce(deleted_at, now()) WHERE id = $1', [studentId]);
   await db.query('DELETE FROM sessions WHERE student_id = $1', [studentId]);
 }
 
-// Replaces the student's login password and signs them out everywhere.
-// false when the student has no password login.
+// Replaces the password and signs them out everywhere.
 export async function setPassword(studentId, passwordHash, db = defaultDb) {
-  const { rowCount } = await db.query(
-    "UPDATE auth_identities SET password_hash = $2 WHERE student_id = $1 AND provider = 'password'",
-    [studentId, passwordHash]);
-  if (!rowCount) return false;
+  await db.query('UPDATE user_metadata SET password = $2 WHERE id = $1', [studentId, passwordHash]);
   await db.query('DELETE FROM sessions WHERE student_id = $1', [studentId]);
-  return true;
 }
 
-// Logins and sessions cascade; their payments are kept with student_id = NULL.
+// Their list rows go back to unregistered, so they can register again;
+// sessions, attempts, quiz runs and answers cascade.
 export async function hardDelete(studentId, db = defaultDb) {
-  await db.query('DELETE FROM students WHERE id = $1', [studentId]);
+  await db.query(
+    `UPDATE "user" SET metadata_id = NULL, status = 'unregistered', registered_at = NULL
+      WHERE metadata_id = $1`,
+    [studentId]);
+  await db.query('DELETE FROM user_metadata WHERE id = $1', [studentId]);
 }
 
 export async function restore(studentId, db = defaultDb) {
-  await db.query('UPDATE students SET is_deleted = false, deleted_at = NULL WHERE id = $1', [studentId]);
+  await db.query('UPDATE user_metadata SET is_deleted = false, deleted_at = NULL WHERE id = $1', [studentId]);
 }
 
-// ── Password reset ────────────────────────────────────────────────────────
-// Stores a new code unless one was issued less than cooldownSeconds ago.
+// ── Password reset links ──────────────────────────────────────────────────
+// Stores a new link unless one was issued less than cooldownSeconds ago.
 // false when held back by the cooldown.
-export async function upsertPasswordReset({ studentId, codeHash, lifetimeMinutes, cooldownSeconds }, db = defaultDb) {
+export async function upsertResetLink({ studentId, tokenHash, email, lifetimeMinutes, cooldownSeconds }, db = defaultDb) {
   const { rowCount } = await db.query(
-    `INSERT INTO student_password_resets (student_id, code_hash, expires_at)
-     VALUES ($1, $2, now() + make_interval(mins => $3))
+    `INSERT INTO student_reset_links (student_id, token_hash, email, expires_at)
+     VALUES ($1, $2, $3, now() + make_interval(mins => $4))
      ON CONFLICT (student_id) DO UPDATE
-       SET code_hash = EXCLUDED.code_hash, attempts = 0,
+       SET token_hash = EXCLUDED.token_hash, email = EXCLUDED.email,
            created_at = now(), expires_at = EXCLUDED.expires_at
-       WHERE student_password_resets.created_at < now() - make_interval(secs => $4)`,
-    [studentId, codeHash, lifetimeMinutes, cooldownSeconds]);
+       WHERE student_reset_links.created_at < now() - make_interval(secs => $5)`,
+    [studentId, tokenHash, email, lifetimeMinutes, cooldownSeconds]);
   return rowCount > 0;
 }
 
-// The unexpired reset for a live student, by login email, locked for the check.
-export async function findPasswordReset(email, db = defaultDb) {
+// The unexpired link for a live student, locked while it's used.
+export async function findResetLink(tokenHash, db = defaultDb) {
   const { rows } = await db.query(
-    `SELECT r.student_id, r.code_hash, r.attempts
-       FROM student_password_resets r
-       JOIN students s ON s.id = r.student_id
-       JOIN auth_identities ai ON ai.student_id = s.id AND ai.provider = 'password'
-      WHERE ai.provider_subject = $1 AND NOT s.is_deleted AND r.expires_at > now()
+    `SELECT r.student_id, r.email
+       FROM student_reset_links r JOIN user_metadata m ON m.id = r.student_id
+      WHERE r.token_hash = $1 AND r.expires_at > now() AND NOT m.is_deleted
       FOR UPDATE OF r`,
-    [email]);
+    [tokenHash]);
   return rows[0] || null;
 }
 
-export async function countPasswordResetAttempt(studentId, db = defaultDb) {
-  await db.query('UPDATE student_password_resets SET attempts = attempts + 1 WHERE student_id = $1', [studentId]);
+// The link reached `email`, so it becomes the account's verified email.
+export async function verifyEmail(studentId, email, db = defaultDb) {
+  await db.query(
+    'UPDATE user_metadata SET email = $2, email_verified_at = now() WHERE id = $1', [studentId, email]);
 }
 
-export async function deletePasswordReset(studentId, db = defaultDb) {
-  await db.query('DELETE FROM student_password_resets WHERE student_id = $1', [studentId]);
+export async function deleteResetLink(studentId, db = defaultDb) {
+  await db.query('DELETE FROM student_reset_links WHERE student_id = $1', [studentId]);
 }

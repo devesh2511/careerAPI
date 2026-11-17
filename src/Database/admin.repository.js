@@ -61,7 +61,7 @@ export async function softDelete(adminId, db = defaultDb) {
   await db.query('DELETE FROM admin_sessions WHERE admin_id = $1', [adminId]);
 }
 
-// Sessions cascade; contests, schools and roster rows keep created_by/added_by = NULL.
+// Sessions cascade; contests, institutes, subscriptions, payments and list rows keep created_by/recorded_by/added_by = NULL.
 export async function hardDelete(adminId, db = defaultDb) {
   await db.query('DELETE FROM admins WHERE id = $1', [adminId]);
 }

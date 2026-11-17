@@ -1,12 +1,12 @@
-// Students (docs/openapi.yaml → Admin · Students), at /admin/students.
+// Student accounts (docs/openapi.yaml → Admin · Students), at /admin/students.
 import { Router } from 'express';
 import {
-  uuidId, listDeleted, deleteMode, searchPattern, SetStudentPasswordRequest, StudentSubscriptionRequest,
+  intId, listDeleted, deleteMode, searchPattern, SetStudentPasswordRequest,
 } from '../DTO/admin.requests.js';
 import * as students from '../Services/admin.student.service.js';
 
 export const adminStudentsController = Router();
-const studentId = req => uuidId(req.params.id, 'student');
+const studentId = req => intId(req.params.id, 'student');
 
 adminStudentsController.get('/', async (req, res) => {
   res.json(await students.list({ deleted: listDeleted(req.query), pattern: searchPattern(req.query) }));
@@ -26,18 +26,9 @@ adminStudentsController.post('/:id/restore', async (req, res) => {
   res.json({ ok: true });
 });
 
-// Sets a new password and signs the student out everywhere.
+// Sets a new password and signs the student out everywhere. The way back in
+// for a student with no email.
 adminStudentsController.post('/:id/password', async (req, res) => {
   await students.setPassword(studentId(req), new SetStudentPasswordRequest(req.body));
   res.json({ ok: true });
-});
-
-// Individual plans, paid outside the website and recorded here.
-adminStudentsController.get('/:id/subscriptions', async (req, res) => {
-  res.json(await students.listSubscriptions(studentId(req)));
-});
-
-adminStudentsController.post('/:id/subscriptions', async (req, res) => {
-  const id = studentId(req);
-  res.status(201).json(await students.recordPayment(id, new StudentSubscriptionRequest(req.body)));
 });

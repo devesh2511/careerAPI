@@ -1,8 +1,9 @@
-// Queries on student_profiles (the onboarding answers).
+// Queries on student_profiles: the onboarding answers beyond class, board
+// and city (those live on user_metadata).
 import { db as defaultDb } from './db.js';
 
 const JSON_COLUMNS = ['marks', 'favourite_subjects', 'hobbies'];
-const COLUMNS = ['class', 'board', 'medium', 'city', 'marks', 'favourite_subjects', 'hobbies',
+const COLUMNS = ['medium', 'marks', 'favourite_subjects', 'hobbies',
   'dream_job', 'career_preference', 'study_location'];
 
 export async function findByStudent(studentId, db = defaultDb) {

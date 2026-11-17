@@ -1,11 +1,10 @@
 // Request bodies and parameters for /admin/*. Each constructor validates and
 // normalises the raw input, throwing ApiError (400 with the bad field) when
-// it's wrong. Admin login reuses LoginRequest from auth.requests.js.
+// it's wrong.
 import { ApiError } from './ApiError.js';
-import { EMAIL_RE, PASSWORD_MIN, PASSWORD_MAX, str } from './auth.requests.js';
+import { EMAIL_RE, PASSWORD_MIN, PASSWORD_MAX, str, normName, normPhone } from './auth.requests.js';
 
 export const AREAS = ['Logical Reasoning', 'Numerical Ability', 'Verbal Ability', 'Spatial Reasoning'];
-const BOARDS = ['CBSE', 'ICSE', 'State Board'];
 const INT_MAX = 2147483647;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -36,6 +35,41 @@ export function deleteMode(query) {
 export function searchPattern(query) {
   const q = str(query.q).trim().slice(0, 100);
   return q ? `%${q.replace(/[\\%_]/g, c => '\\' + c)}%` : '';
+}
+
+// ── Admin login and password reset (by email, with a 6-digit code) ────────
+// Login doesn't validate format: any wrong input is just bad_credentials.
+export class AdminLoginRequest {
+  constructor(body = {}) {
+    this.email = str(body.email).trim().toLowerCase();
+    this.password = str(body.password).slice(0, PASSWORD_MAX);
+  }
+}
+
+// Doesn't reveal whether the email exists, so a malformed email is simply
+// not found rather than an error.
+export class AdminForgotPasswordRequest {
+  constructor(body = {}) {
+    this.email = str(body.email).trim().toLowerCase().slice(0, 254);
+  }
+}
+
+export class AdminResetPasswordRequest {
+  constructor(body = {}) {
+    this.email = str(body.email).trim().toLowerCase().slice(0, 254);
+    if (!this.email) throw ApiError.invalid('Please enter your email.', 'email');
+
+    this.code = str(body.code).replace(/\s+/g, '');
+    if (!/^\d{6}$/.test(this.code)) throw ApiError.invalid('The code is 6 digits.', 'code');
+
+    this.newPassword = str(body.new_password);
+    if (this.newPassword.length < PASSWORD_MIN) {
+      throw ApiError.invalid(`Password must be at least ${PASSWORD_MIN} characters.`, 'new_password');
+    }
+    if (this.newPassword.length > PASSWORD_MAX) {
+      throw ApiError.invalid(`Password must be at most ${PASSWORD_MAX} characters.`, 'new_password');
+    }
+  }
 }
 
 // ── Bodies ────────────────────────────────────────────────────────────────
@@ -123,98 +157,90 @@ export class QuestionRequest {
   }
 }
 
-// POST and PUT /admin/schools (SchoolInput).
-export class SchoolRequest {
+// POST and PUT /admin/institutes (InstituteInput).
+export const INSTITUTE_TYPES = ['school', 'tuition', 'coaching', 'other'];
+export class InstituteRequest {
   constructor(body = {}) {
-    const required = (key, label, max = 200) => {
+    const text = (key, label, { max = 200, required = false } = {}) => {
       const v = str(body[key]).trim();
-      if (!v) throw ApiError.invalid(`${label} is required.`, key);
+      if (required && !v) throw ApiError.invalid(`${label} is required.`, key);
       if (v.length > max) throw ApiError.invalid(`${label} must be at most ${max} characters.`, key);
-      return v;
+      return v || null;
     };
-    this.name = required('name', 'School name');
-    this.school_code = required('school_code', 'School ID').toUpperCase();
-    if (!/^[A-Z0-9-]{3,20}$/.test(this.school_code)) {
-      throw ApiError.invalid('School ID must be 3–20 letters, digits or dashes.', 'school_code');
+    this.name = text('name', 'Institute name', { max: 120, required: true });
+    this.institute_code = text('institute_code', 'Institute ID', { max: 20, required: true }).toUpperCase();
+    if (!/^[A-Z0-9-]{3,20}$/.test(this.institute_code)) {
+      throw ApiError.invalid('Institute ID must be 3–20 letters, digits or dashes.', 'institute_code');
     }
-    const udise = str(body.udise_code).trim();
-    if (udise && !/^[0-9]{11}$/.test(udise)) throw ApiError.invalid('UDISE+ code must be 11 digits.', 'udise_code');
-    this.udise_code = udise || null;
-    this.board = BOARDS.includes(body.board) ? body.board : null;
-    this.city = required('city', 'City', 100);
-    this.state = required('state', 'State', 100);
+    this.type = body.type;
+    if (!INSTITUTE_TYPES.includes(this.type)) {
+      throw ApiError.invalid(`Type must be one of: ${INSTITUTE_TYPES.join(', ')}.`, 'type');
+    }
+    this.address = text('address', 'Address', { max: 500 });
+    this.city = text('city', 'City', { max: 80, required: true });
+    this.contact_details = text('contact_details', 'Contact details', { max: 255 });
     this.status = body.status === 'suspended' ? 'suspended' : 'active';
-    this.contact_name = required('contact_name', 'Contact name', 100);
-    this.contact_email = required('contact_email', 'Contact email', 254).toLowerCase();
-    if (!EMAIL_RE.test(this.contact_email)) throw ApiError.invalid('Contact email looks wrong.', 'contact_email');
-    this.contact_phone = str(body.contact_phone).trim().slice(0, 40) || null;
   }
 }
 
-// POST /admin/schools/:id/subscriptions — a payment the school made.
-// A payment an admin records by hand: the dates it covers, the amount and
-// the payment's reference. providers: the accepted payment_provider values.
-class PaymentRequest {
-  constructor(body, providers) {
-    const date = key => {
-      const t = typeof body[key] === 'string' ? Date.parse(body[key]) : NaN;
-      return Number.isNaN(t) ? null : new Date(t);
-    };
-    this.startsAt = date('starts_at');
+// 'YYYY-MM-DD' or a full ISO time → Date, else null.
+function parseDate(v) {
+  const t = typeof v === 'string' && v.trim() ? Date.parse(v) : NaN;
+  return Number.isNaN(t) ? null : new Date(t);
+}
+
+// POST /admin/institutes/:id/students?head_count=&starts_at=&ends_at=
+// The query that goes with an uploaded student list; the body is the file.
+export class StudentListUploadQuery {
+  constructor(query = {}) {
+    this.headCount = Number(query.head_count);
+    if (!Number.isInteger(this.headCount) || this.headCount < 1 || this.headCount > 100000) {
+      throw ApiError.invalid('Enter the headcount the institute paid for.', 'head_count');
+    }
+    this.startsAt = parseDate(query.starts_at);
     if (!this.startsAt) throw ApiError.invalid('Pick a start date.', 'starts_at');
-    this.endsAt = date('ends_at');
+    this.endsAt = parseDate(query.ends_at);
     if (!this.endsAt || this.endsAt <= this.startsAt) {
       throw ApiError.invalid('The end date must be after the start date.', 'ends_at');
     }
-
-    this.amountPaise = body.amount_paise;
-    if (!Number.isInteger(this.amountPaise) || this.amountPaise < 0 || this.amountPaise > INT_MAX) {
-      throw ApiError.invalid('Enter the amount paid.', 'amount_paise');
-    }
-
-    this.paymentProvider = body.payment_provider ?? providers[0];
-    if (!providers.includes(this.paymentProvider)) {
-      throw ApiError.invalid(`Payment provider must be one of: ${providers.join(', ')}.`, 'payment_provider');
-    }
-    this.paymentRef = str(body.payment_ref).trim();
-    if (!this.paymentRef) throw ApiError.invalid('Enter the invoice or payment reference.', 'payment_ref');
-    if (this.paymentRef.length > 100) {
-      throw ApiError.invalid('The reference must be at most 100 characters.', 'payment_ref');
-    }
   }
 }
 
-export class SchoolSubscriptionRequest extends PaymentRequest {
-  constructor(body = {}) { super(body, ['invoice', 'razorpay']); }
+// DELETE /admin/institutes/:id/students?full_name=&phone_no= — one list row.
+export class ListRowQuery {
+  constructor(query = {}) {
+    this.name = normName(query.full_name);
+    this.phoneNo = normPhone(query.phone_no);
+    if (!this.name || !this.phoneNo) throw ApiError.notFound('student');
+  }
 }
 
-// Students pay outside the website; an admin records the payment ID.
-export const STUDENT_PLANS = ['student_monthly', 'student_annual'];
-export const STUDENT_PAYMENT_PROVIDERS = ['upi', 'bank_transfer', 'razorpay', 'cash', 'other'];
-export class StudentSubscriptionRequest extends PaymentRequest {
+// POST /admin/institutes/:id/payments — a payment the institute made,
+// recorded after its list was uploaded. subscription_id: the upload it pays for.
+export class PaymentRequest {
   constructor(body = {}) {
-    super(body, STUDENT_PAYMENT_PROVIDERS);
-    this.plan = body.plan;
-    if (!STUDENT_PLANS.includes(this.plan)) {
-      throw ApiError.invalid('Plan must be student_monthly or student_annual.', 'plan');
+    this.subscriptionId = Number(body.subscription_id);
+    if (!Number.isInteger(this.subscriptionId) || this.subscriptionId < 1 || this.subscriptionId > INT_MAX) {
+      throw ApiError.invalid('Pick the subscription this payment is for.', 'subscription_id');
     }
+    const amount = typeof body.amount === 'string' ? Number(body.amount) : body.amount;
+    if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0 || amount >= 1e10 ||
+        Math.round(amount * 100) !== amount * 100) {
+      throw ApiError.invalid('Enter the amount paid, in rupees (up to 2 decimals).', 'amount');
+    }
+    this.amount = amount;
+    this.modeOfPayment = str(body.mode_of_payment).trim();
+    if (!this.modeOfPayment) throw ApiError.invalid('Enter how they paid (UPI, bank transfer…).', 'mode_of_payment');
+    if (this.modeOfPayment.length > 40) {
+      throw ApiError.invalid('Mode of payment must be at most 40 characters.', 'mode_of_payment');
+    }
+    const ref = str(body.transaction_id).trim();
+    if (ref.length > 100) throw ApiError.invalid('The transaction ID must be at most 100 characters.', 'transaction_id');
+    this.transactionId = ref || null;
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(str(body.date_of_payment)) ? parseDate(body.date_of_payment) : null;
+    if (!d) throw ApiError.invalid('Pick the date of payment.', 'date_of_payment');
+    this.dateOfPayment = str(body.date_of_payment);
   }
-}
-
-// POST /admin/schools/:id/roster — CSV text. One email per line; commas and
-// semicolons also separate, quotes are stripped, an `email` header is skipped.
-export function parseRoster(text) {
-  const emails = [], invalid = [], seen = new Set();
-  for (const raw of String(text || '').split(/[\r\n,;]+/)) {
-    const value = raw.trim().replace(/^"|"$/g, '').trim();
-    const email = value.toLowerCase();
-    if (!email || seen.has(email)) continue;
-    seen.add(email);
-    if (email === 'email' || email === 'emails') continue;
-    if (!EMAIL_RE.test(email) || email.length > 254) invalid.push(value);
-    else emails.push(email);
-  }
-  return { emails, invalid };
 }
 
 // PUT /admin/roadmap?career= — { steps, version }. version is the one the

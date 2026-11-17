@@ -1,18 +1,17 @@
-// Students as the admin panel sees them: with their email and access
-// result, and the individual payments an admin records for them.
+// Student accounts (user_metadata) as the admin panel sees them: with their
+// phone, email, access result and the institute lists they're on.
 import { withTransaction } from '../Database/db.js';
 import * as students from '../Database/student.repository.js';
-import * as subscriptions from '../Database/subscription.repository.js';
+import * as studentList from '../Database/studentList.repository.js';
 import { ApiError } from '../DTO/ApiError.js';
 import { StudentDTO } from '../DTO/StudentDTO.js';
-import { SubscriptionDTO, guardDuplicatePayment } from '../DTO/SubscriptionDTO.js';
 import { accessFromFacts } from './access.service.js';
 import { hashPassword } from './password.service.js';
 
-// r: a students row with its access facts.
+// r: a user_metadata row with its access facts.
 const toAdminDTO = r => Object.assign(
-  new StudentDTO(r, r.name ? { name: r.name, school_code: r.school_code } : null),
-  { is_deleted: r.is_deleted, deleted_at: r.deleted_at, access: accessFromFacts(r) });
+  new StudentDTO(r, r.institute_name ? { name: r.institute_name, institute_code: r.institute_code, type: r.institute_type } : null),
+  { is_deleted: r.is_deleted, deleted_at: r.deleted_at, last_login_at: r.last_login_at, access: accessFromFacts(r) });
 
 export async function list({ deleted, pattern }) {
   return (await students.listForAdmin({ deleted, pattern })).map(toAdminDTO);
@@ -21,18 +20,23 @@ export async function list({ deleted, pattern }) {
 export async function get(studentId) {
   const row = await students.findForAdmin(studentId);
   if (!row) throw ApiError.notFound('student');
-  return toAdminDTO(row);
+  const institutes = (await studentList.forAccount(studentId)).map(i => ({
+    id: i.id, name: i.name, institute_code: i.institute_code, type: i.type, is_deleted: i.is_deleted,
+    registered_at: i.registered_at,
+    subscription: i.subscription_ends_at ? { active: i.subscription_active, ends_at: i.subscription_ends_at } : null,
+  }));
+  return Object.assign(toAdminDTO(row), { institutes });
 }
 
 async function mustExist(studentId) {
   if (!(await students.exists(studentId))) throw ApiError.notFound('student');
 }
 
-// Soft: can't log in, restorable. Hard: gone, payments kept without a payer.
+// Soft: can't log in, restorable. Hard: the account and its app data are
+// gone; their list rows stay and go back to unregistered.
 export async function remove(studentId, mode) {
   await mustExist(studentId);
-  if (mode === 'hard') await students.hardDelete(studentId);
-  else await withTransaction(db => students.softDelete(studentId, db));
+  await withTransaction(db => (mode === 'hard' ? students.hardDelete(studentId, db) : students.softDelete(studentId, db)));
 }
 
 export async function restore(studentId) {
@@ -45,19 +49,5 @@ export async function restore(studentId) {
 export async function setPassword(studentId, req) {
   await mustExist(studentId);
   const passwordHash = await hashPassword(req.password);
-  const ok = await withTransaction(db => students.setPassword(studentId, passwordHash, db));
-  if (!ok) throw new ApiError(409, 'no_password_login', 'This student has no password login.');
-}
-
-// ── Payments ──────────────────────────────────────────────────────────────
-export async function listSubscriptions(studentId) {
-  await mustExist(studentId);
-  return (await subscriptions.listForStudent(studentId)).map(s => new SubscriptionDTO(s));
-}
-
-// req: StudentSubscriptionRequest. Students pay outside the website; this
-// records the payment as an active individual plan.
-export async function recordPayment(studentId, req) {
-  await mustExist(studentId);
-  return new SubscriptionDTO(await guardDuplicatePayment(() => subscriptions.insertStudentPlan(studentId, req)));
+  await withTransaction(db => students.setPassword(studentId, passwordHash, db));
 }

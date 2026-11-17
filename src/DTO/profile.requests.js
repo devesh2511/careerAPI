@@ -1,10 +1,9 @@
-// Request bodies for PUT /me (name) and PUT /me/profile (onboarding
-// answers). Each constructor validates and normalises the raw input,
+// Request bodies for PUT /me (account details) and PUT /me/profile
+// (onboarding answers). Each constructor validates and normalises the raw input,
 // throwing ApiError (400 with the bad field) when it's wrong.
 import { ApiError } from './ApiError.js';
-import { str } from './auth.requests.js';
+import { str, accountDetails, optionalEmail } from './auth.requests.js';
 
-const BOARDS = ['CBSE', 'ICSE', 'State Board'];
 const MEDIUMS = ['English', 'Hindi', 'Regional Language'];
 const PREFERENCES = ['Private Sector', 'Government Job', 'Entrepreneur'];
 const LOCATIONS = ['Yes, anywhere', 'Same state only', 'Prefer home city'];
@@ -14,25 +13,28 @@ const TEXT_MAX = 80;
 const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const clean = v => str(v).trim().replace(/\s+/g, ' ');
 
-// PUT /me
-export class NameRequest {
+// PUT /me { email?, class?, board?, city? } — only the given keys change.
+// Name and phone can't change here: together they are how the student is
+// found on their institutes' lists. email null or '' removes it.
+export class AccountRequest {
   constructor(body = {}) {
-    this.fullName = clean(body.full_name);
-    if (!this.fullName) throw ApiError.invalid('Please enter your full name.', 'full_name');
-    if (this.fullName.length > TEXT_MAX) throw ApiError.invalid('Full name must be at most 80 characters.', 'full_name');
+    if (!isObject(body)) throw ApiError.invalid('Send the details as a JSON object.');
+    this.details = accountDetails(body, { partial: true });
+    if (Object.prototype.hasOwnProperty.call(body, 'email')) this.details.email = optionalEmail({ email: body.email ?? '' });
+    if (!Object.keys(this.details).length) throw ApiError.invalid('Nothing to change.');
   }
 }
 
-// PUT /me/profile. class is always required; every other answer is only
-// changed when its key is in the body (null clears it), so each onboarding
-// step and the Settings editor can save just their own fields.
+// PUT /me/profile. Each answer is only changed when its key is in the body
+// (null clears it), so each onboarding step and the Settings editor can save
+// just their own fields. class, board and city go to the account and can't
+// be cleared.
 export class ProfileRequest {
   constructor(body = {}) {
     if (!isObject(body)) throw ApiError.invalid('Send the profile as a JSON object.');
     this.fields = {};
 
-    if (body.class !== 9 && body.class !== 10) throw ApiError.invalid('class must be 9 or 10.', 'class');
-    this.fields.class = body.class;
+    this.details = accountDetails(body, { partial: true });
 
     const has = key => Object.prototype.hasOwnProperty.call(body, key);
     const oneOf = (key, allowed) => {
@@ -59,9 +61,7 @@ export class ProfileRequest {
       this.fields[key] = v === null ? null : [...new Set(v.map(clean))];
     };
 
-    oneOf('board', BOARDS);
     oneOf('medium', MEDIUMS);
-    text('city');
     if (has('marks')) {
       const m = body.marks;
       if (m !== null && (!isObject(m) || Object.keys(m).length > LIST_MAX ||
