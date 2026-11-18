@@ -51,3 +51,10 @@ export async function remove(requestId, db = defaultDb) {
 export async function removeFor(instituteId, studentId, db = defaultDb) {
   await db.query('DELETE FROM join_requests WHERE institute_id = $1 AND metadata_id = $2', [instituteId, studentId]);
 }
+
+// The same, for several accounts at once (accounts a list upload linked).
+export async function removeForMany(instituteId, studentIds, db = defaultDb) {
+  if (!studentIds.length) return;
+  await db.query('DELETE FROM join_requests WHERE institute_id = $1 AND metadata_id = ANY($2::int[])',
+    [instituteId, studentIds]);
+}

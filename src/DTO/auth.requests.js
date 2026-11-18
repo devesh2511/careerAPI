@@ -115,17 +115,21 @@ export class LoginRequest {
 }
 
 // ── Password reset ────────────────────────────────────────────────────────
-// POST /auth/forgot-password { username } — or, when the account has no
-// email yet, { username, email, full_name, phone_no, institute_code }: the
-// same proof registration asks for, plus where to send the link.
+// POST /auth/forgot-password { username }. The link only goes to a
+// confirmed email.
 export class ForgotPasswordRequest {
   constructor(body = {}) {
     this.username = str(body.username).trim().toLowerCase().slice(0, 254);
     if (!this.username) throw ApiError.invalid('Please enter your username.', 'username');
-    this.proof = null;
-    if (str(body.email).trim()) {
-      this.email = optionalEmail(body);
-      this.proof = new ListEntryRequest(body);
+  }
+}
+
+// POST /auth/confirm-email { token }, from the emailed link.
+export class ConfirmEmailRequest {
+  constructor(body = {}) {
+    this.token = str(body.token).trim();
+    if (!/^[A-Za-z0-9_-]{20,100}$/.test(this.token)) {
+      throw new ApiError(400, 'invalid_link', 'This link is wrong or has expired. Ask for a new one.', 'token');
     }
   }
 }

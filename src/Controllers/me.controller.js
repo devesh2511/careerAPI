@@ -1,6 +1,6 @@
 // The logged-in student (docs/openapi.yaml → Me). GET /me, PUT /me and
 // GET /me/access are free: the paywall needs them before the student has access.
-//   GET /me   PUT /me   GET /me/access
+//   GET /me   PUT /me   GET /me/access   POST /me/email/confirm
 //   GET /me/profile (paid)   PUT /me/profile (paid)
 //   PUT /me/career (paid)   GET /me/contest-history (paid)
 //   POST /me/career-quiz (paid)   GET /me/career-quiz/latest (paid)
@@ -15,6 +15,7 @@ import {
   toStudentDTO, setCareer, setDetails, getProfile, saveProfile,
 } from '../Services/student.service.js';
 import { history } from '../Services/contest.service.js';
+import { requestConfirmation } from '../Services/email.confirm.service.js';
 import { saveRun, latestRun, savedRuns } from '../Services/quiz.service.js';
 
 export const meController = Router();
@@ -29,6 +30,12 @@ meController.get('/', async (req, res) => {
 // Name and phone can't change: they are how institutes' lists find the student.
 meController.put('/', async (req, res) => {
   res.json({ student: await setDetails(req.student.id, new AccountRequest(req.body)) });
+});
+
+// Free: "Confirm email" on the account page. Emails a link to the current
+// email. → { status: 'sent' | 'already_sent' | 'already_verified' }
+meController.post('/email/confirm', async (req, res) => {
+  res.json(await requestConfirmation(req.student));
 });
 
 meController.get('/profile', requireAccess, async (req, res) => {

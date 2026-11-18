@@ -233,7 +233,10 @@ paths:
       description: |
         Username (case-insensitive) and password. The response includes the
         access check, so the app can go straight to the dashboard or to the
-        paywall. Soft-deleted accounts get the same `401` as a wrong password.
+        paywall. Soft-deleted accounts get the same `401` as a wrong password. A
+        deactivated account (malpractice) gets `403 account_deactivated`, but
+        only when the password is right, so nobody can find out which accounts
+        are deactivated.
       security: []
       requestBody:
         required: true
@@ -259,6 +262,12 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
               example: { error: { code: bad_credentials, message: Username or password is incorrect. } }
+        '403':
+          description: '`account_deactivated`: the password is right but an admin deactivated the account'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: { code: account_deactivated, message: Your account has been deactivated. Please contact your institute. } }
 
   /auth/logout:
     post:
@@ -270,19 +279,19 @@ paths:
   /auth/forgot-password:
     post:
       tags: [Auth]
-      summary: Email a password-reset link
+      summary: Email a password-reset link (confirmed emails only)
       description: |
-        Send `{ username }` first. If the account has an email, a link valid for
-        30 minutes goes there (`needs_email: false`). If it has none, the answer is
-        `needs_email: true`: ask for an email and send again with the same proof
-        registration asks for (`full_name`, `phone_no`, `institute_code`). When it
-        matches the account, the link goes to that email. Opening the link verifies
-        the email. A verified email is never replaced this way.
+        If the account has an email the student has confirmed (`POST
+        /me/email/confirm`, then the emailed link), a reset link valid for 30
+        minutes goes there. Nothing is sent to an unconfirmed email, or for a
+        deleted or deactivated account.
 
-        An unknown username also answers `needs_email: true`, and a proof that
-        doesn't match still answers `200`, so neither tells which accounts exist.
-        At most one link a minute per account. This is only as strong as
-        registration; an admin can always set a new password instead.
+        The answer is always `200 { ok: true }`, and takes at least ~2.5 s, so
+        neither the answer nor its timing tells which usernames exist or which
+        have a confirmed email. A failed send is logged, not returned. At most
+        one link a minute per account. A student without a confirmed email asks
+        their institute to contact us, and an admin sets a new password
+        (`POST /admin/students/{id}/password`).
       security: []
       requestBody:
         required: true
@@ -293,31 +302,43 @@ paths:
               required: [username]
               properties:
                 username: { type: string }
-                email: { type: string, format: email, description: Step 2 only }
-                full_name: { type: string, description: Step 2 only }
-                phone_no: { type: string, description: Step 2 only }
-                institute_code: { type: string, description: Step 2 only }
       responses:
-        '200':
-          description: Done (or nothing to do)
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  needs_email: { type: boolean }
+        '200': { $ref: '#/components/responses/Ok' }
         '400': { $ref: '#/components/responses/Invalid' }
-        '503': { description: '`email_failed`: the email provider rejected the message', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /auth/confirm-email:
+    post:
+      tags: [Auth]
+      summary: Confirm an email from the emailed link
+      description: |
+        `token` is the part after `#confirm=` in the link `POST /me/email/confirm`
+        sent. It works once, for 24 hours, and doesn't need a login (the student
+        may open it on another device). It confirms the account's email only if
+        that's still the address the link went to; changing the email cancels
+        any link already sent.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '400': { description: '`invalid_link`: wrong, used, expired, or the email has changed since', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /auth/reset-password:
     post:
       tags: [Auth]
       summary: Set a new password from an emailed link
       description: |
-        `token` is the part after `#reset=` in the link. It works once. On
-        success the email it went to becomes the account's verified email, every
-        session of that student ends (and this browser's cookie is cleared); log
-        in again with the new password.
+        `token` is the part after `#reset=` in the link. It works once. Links only
+        go to confirmed emails, and changing the email cancels them. On success
+        every session of that student ends (and this browser's cookie is
+        cleared); log in again with the new password.
       security: []
       requestBody:
         required: true
@@ -381,6 +402,30 @@ paths:
                   student: { $ref: '#/components/schemas/Student' }
         '400': { $ref: '#/components/responses/Invalid' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /me/email/confirm:
+    post:
+      tags: [Me]
+      summary: Email a link that confirms the student's email
+      description: |
+        Free. The "Confirm email" button on the account page: the only time a
+        confirmation email is sent (never at registration). The link goes to the
+        account's current email and works once, for 24 hours (`POST
+        /auth/confirm-email`). Pressing it again within a minute sends nothing
+        (`already_sent`).
+      responses:
+        '200':
+          description: What happened
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [sent, already_sent, already_verified] }
+        '400': { description: '`no_email`: add an email first (`PUT /me`)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '503': { description: '`email_failed`: the email provider rejected the message', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /me/access:
     get:
@@ -1225,7 +1270,7 @@ paths:
         '400': { $ref: '#/components/responses/Invalid' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: '`institute_code_taken`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: '`institute_code_taken`, or `school_conflict`: becoming a school would put students on two schools'' lists', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     delete:
       tags: [Admin · Institutes]
       summary: Delete an institute
@@ -1287,6 +1332,17 @@ paths:
         Otherwise a subscription is created for the headcount and dates, and every
         student in the file is put on it: new ones are added, ones already on the
         list (a renewal) move to it. Record the payment afterwards.
+
+        Students who already have an account (matched by name + phone, else by
+        old details an admin corrected) are linked to it straight away: no second
+        account, no password step. A row matched by old details goes on the list
+        with the account's current details.
+
+        One school per student: a `school` upload takes everyone in it off any
+        other school's list (`moved`), and the newest upload wins. When this
+        subscription starts later and another school's still covers someone, the
+        upload is refused (`409 school_move_too_early`, the students in
+        `details.students`) so nobody is cut off in between.
       security: [{ adminSession: [] }]
       parameters:
         - { in: query, name: head_count, required: true, schema: { type: integer, minimum: 1 } }
@@ -1311,10 +1367,39 @@ paths:
                   rows: { type: integer, description: Students in the file }
                   added: { type: integer, description: New to the list }
                   renewed: { type: integer, description: Already on the list, moved to this subscription }
+                  linked: { type: integer, description: Rows linked to an account that already existed }
+                  moved:
+                    type: array
+                    description: Rows taken off another school's list (one school per student)
+                    items:
+                      type: object
+                      properties:
+                        full_name: { type: string }
+                        phone_no: { type: string }
+                        student_id: { type: [integer, 'null'], description: null when that row had no account }
+                        from: { type: object, properties: { id: { type: integer }, name: { type: string }, institute_code: { type: string } } }
+                  matched_by_old_details:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        uploaded_name: { type: string }
+                        uploaded_phone: { type: string }
+                        student_id: { type: integer }
+                        current_name: { type: string }
+                        current_phone: { type: string }
+                  ambiguous:
+                    type: array
+                    description: Rows whose old details fit more than one account; added but not linked
+                    items: { type: object, properties: { full_name: { type: string }, phone_no: { type: string } } }
+                  deactivated:
+                    type: array
+                    description: Linked accounts that are deactivated (still can't log in)
+                    items: { type: object, properties: { student_id: { type: integer }, full_name: { type: string }, phone_no: { type: string } } }
         '400': { description: '`invalid` (query), `bad_file`, `empty_file` or `too_many_rows`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: '`institute_deleted`, or `renewal_too_early`: a renewal starting later while students in the file are still on a current subscription (moving them now would cut them off)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: '`institute_deleted`; `renewal_too_early`: a renewal starting later while students in the file are still on a current subscription (moving them now would cut them off); or `school_move_too_early`: the same, for students on another school''s current subscription', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '422':
           description: '`invalid_rows` or `headcount_exceeded`; nothing was added'
           content:
@@ -1388,6 +1473,10 @@ paths:
                       students: { type: integer, description: On it now, including this student }
                       ends_at: { type: string, format: date-time }
                   over_headcount: { type: boolean }
+                  moved_from:
+                    type: array
+                    description: Other schools they were taken off (one school per student)
+                    items: { type: object, properties: { id: { type: integer }, name: { type: string }, institute_code: { type: string } } }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: '`no_current_subscription`: nothing covers today, so approving wouldn''t activate them. `institute_deleted`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
@@ -1469,6 +1558,7 @@ paths:
       security: [{ adminSession: [] }]
       parameters:
         - $ref: '#/components/parameters/Deleted'
+        - { in: query, name: deactivated, description: 'true: only deactivated accounts, deleted or not (ignores `deleted`)', schema: { type: boolean } }
         - { in: query, name: q, description: 'Search name, username, phone or email', schema: { type: string } }
       responses:
         '200':
@@ -1510,6 +1600,14 @@ paths:
                               oneOf:
                                 - { type: object, properties: { active: { type: boolean }, ends_at: { type: string, format: date-time } } }
                                 - type: 'null'
+                      old_details:
+                        type: array
+                        description: Names / phones it had before an admin corrected them, newest first. Uploads still match these.
+                        items: { type: object, properties: { full_name: { type: string }, phone_no: { type: string }, replaced_at: { type: string, format: date-time } } }
+                      history:
+                        type: array
+                        description: Newest first
+                        items: { $ref: '#/components/schemas/StudentEvent' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
     delete:
@@ -1546,8 +1644,10 @@ paths:
       tags: [Admin · Students]
       summary: Reset a student's password
       description: |
-        Sets a new password and signs the student out on every device.
-        A soft-deleted student still can't log in until restored.
+        Sets a new password and signs the student out on every device. The way
+        back in for a student without a confirmed email. Recorded in their
+        history (`password_set`). A soft-deleted or deactivated student still
+        can't log in until restored / reactivated.
       security: [{ adminSession: [] }]
       requestBody:
         required: true
@@ -1563,6 +1663,101 @@ paths:
         '400': { $ref: '#/components/responses/Invalid' }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/students/{id}/deactivate:
+    parameters:
+      - $ref: '#/components/parameters/StudentId'
+    post:
+      tags: [Admin · Students]
+      summary: Deactivate (malpractice) or take off a list (left an institute)
+      description: |
+        One action, the reason decides:
+        - `malpractice`: the whole account is locked. Signed out everywhere,
+          can't log in (`403 account_deactivated` once the password is right),
+          hidden from leaderboards; attempts and results are kept. Only
+          `POST .../reactivate` lifts it. Separate from soft delete.
+        - `left_institute`: only that institute's list row goes. The account
+          keeps its other lists; on none, it can log in but has no access
+          (`no_institute`). A later upload links it back.
+
+        Recorded in the student's history with the note.
+      security: [{ adminSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason, note]
+              properties:
+                reason: { type: string, enum: [malpractice, left_institute] }
+                institute_id: { type: integer, description: Required for left_institute }
+                note: { type: string, maxLength: 500, description: Why, and who asked }
+      responses:
+        '200':
+          description: The student, as `GET /admin/students/{id}` returns it
+          content: { application/json: { schema: { $ref: '#/components/schemas/AdminStudent' } } }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: '`already_deactivated`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/students/{id}/reactivate:
+    parameters:
+      - $ref: '#/components/parameters/StudentId'
+    post:
+      tags: [Admin · Students]
+      summary: Lift a malpractice deactivation
+      security: [{ adminSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [note], properties: { note: { type: string, maxLength: 500 } } }
+      responses:
+        '200':
+          description: The student, as `GET /admin/students/{id}` returns it
+          content: { application/json: { schema: { $ref: '#/components/schemas/AdminStudent' } } }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: '`not_deactivated`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/students/{id}/details:
+    parameters:
+      - $ref: '#/components/parameters/StudentId'
+    patch:
+      tags: [Admin · Students]
+      summary: Correct a student's name and/or phone
+      description: |
+        Admin only (students can't change these). The account and every list
+        row it's on take the new details; the old ones are kept (`old_details`)
+        so uploads that still carry them match this account. Refused when the
+        new details are another account's (never merged). Unlinked list rows
+        with the new details are this person: they merge into the account's
+        row on lists it's on (keeping the later-ending subscription) and are
+        linked to it elsewhere (one school kept). A change of case only is
+        allowed and leaves no old details. Recorded in the history.
+      security: [{ adminSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [note]
+              properties:
+                full_name: { type: string, maxLength: 80 }
+                phone_no: { type: string }
+                note: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: The student, as `GET /admin/students/{id}` returns it
+          content: { application/json: { schema: { $ref: '#/components/schemas/AdminStudent' } } }
+        '400': { $ref: '#/components/responses/Invalid' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: '`person_taken`: another account has these details (`details.student` says which)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /admin/admins:
     get:
@@ -1853,7 +2048,7 @@ components:
         leaderboard_name: { type: string, example: Ananya S., description: First name + last initial (schema §2.1) }
         phone_no: { type: string, example: '9876543210', description: Only ever returned to the student themself or to admins }
         email: { type: [string, 'null'], format: email, description: Only ever returned to the student themself or to admins }
-        email_verified: { type: boolean, description: A reset link sent to this email was opened }
+        email_verified: { type: boolean, description: 'Confirmed: they opened a "Confirm email" (or reset) link sent to it. Forgot-password only works when true.' }
         institute:
           description: Their school when they're on a school's list, else the first institute they registered through
           oneOf: [{ $ref: '#/components/schemas/InstituteRef' }, { type: 'null' }]
@@ -1872,6 +2067,26 @@ components:
             deleted_at: { type: [string, 'null'], format: date-time }
             last_login_at: { type: [string, 'null'], format: date-time }
             access: { $ref: '#/components/schemas/Access' }
+            deactivation:
+              description: Set while deactivated for malpractice
+              oneOf:
+                - type: object
+                  properties:
+                    reason: { type: string, enum: [malpractice] }
+                    note: { type: string }
+                    deactivated_at: { type: string, format: date-time }
+                    by: { type: [object, 'null'], properties: { id: { type: string, format: uuid }, full_name: { type: string } } }
+                - type: 'null'
+
+    StudentEvent:
+      type: object
+      description: One entry in a student's history
+      properties:
+        kind: { type: string, enum: [deactivated, reactivated, left_institute, details_changed, password_set, moved_school] }
+        note: { type: [string, 'null'] }
+        data: { type: object, description: 'Old/new details, institutes involved; moved_school has from, to and via (upload, link, register, join_request, details_changed, cleanup)' }
+        created_at: { type: string, format: date-time }
+        admin: { type: [object, 'null'], description: null for automatic events, properties: { id: { type: string, format: uuid }, full_name: { type: string } } }
 
     QuizResult:
       type: object
@@ -2006,10 +2221,11 @@ components:
 
     AccessReason:
       type: [string, 'null']
-      enum: [not_subscribed, pending_approval, null]
+      enum: [not_subscribed, pending_approval, no_institute, null]
       description: |
         `not_subscribed`: no institute list they're on has a subscription covering today.
         `pending_approval`: same, and they've asked to join an institute (join request) that an admin hasn't approved yet.
+        `no_institute`: they're on no institute's list at all (they left, or were removed).
 
     Access:
       type: object

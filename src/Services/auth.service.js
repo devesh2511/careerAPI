@@ -23,6 +23,7 @@ import { hashPassword, verifyPassword, DUMMY_HASH } from './password.service.js'
 import { createSession, endSession } from './session.service.js';
 import { accessFor } from './access.service.js';
 import { toStudentDTO } from './student.service.js';
+import { keepOneSchool } from './oneSchool.service.js';
 
 const notOnList = () => new ApiError(404, 'not_on_list',
   "We couldn't find you on that institute's list. Check your name, phone number and institute ID with your institute.");
@@ -30,6 +31,10 @@ const alreadyRegistered = () => new ApiError(409, 'already_registered',
   "You've already registered with this institute. Log in with your username.");
 const accountDisabled = () => new ApiError(403, 'account_disabled',
   'Your account has been switched off. Please contact your institute.');
+// Only ever said after the password matched, so it doesn't reveal which
+// accounts are deactivated.
+const accountDeactivated = () => new ApiError(403, 'account_deactivated',
+  'Your account has been deactivated. Please contact your institute.');
 const requestPending = () => new ApiError(409, 'request_pending',
   "You've already asked to join this institute. Log in with your username: your account will be activated once it's approved.");
 
@@ -106,10 +111,16 @@ export async function register(req, userAgent) {
     }
     if (!entry) {
       await joinRequests.insert(institute.id, student.id, db);
-      return sessionFor(student.id, userAgent, db);
-    }
-    if (!(await studentList.claim({ instituteId: institute.id, name: entry.name, phoneNo: entry.phone_no, studentId: student.id }, db))) {
+    } else if (!(await studentList.claim({ instituteId: institute.id, name: entry.name, phoneNo: entry.phone_no, studentId: student.id }, db))) {
       throw alreadyRegistered();
+    }
+    // One account per person: the other lists they're on (uploaded before
+    // they had an account) join it too, keeping one school. Only when they
+    // were found on this list: on the join-request path the name and phone
+    // are just what they typed, and must not claim anyone's seat elsewhere.
+    if (entry) {
+      await studentList.claimAllFor(student.id, person, db);
+      await keepOneSchool(student.id, institute.id, { via: 'register' }, db);
     }
     await students.refreshInstitutes([student.id], db);
     return sessionFor(student.id, userAgent, db);
@@ -127,6 +138,7 @@ export async function link(req, userAgent) {
     throw new ApiError(401, 'bad_credentials', "That password doesn't match your existing account.", 'password');
   }
   if (account.is_deleted) throw accountDisabled();
+  if (account.deactivated_at) throw accountDeactivated();
 
   return withTransaction(async db => {
     const { institute, entry } = await findEntry(req, db);
@@ -141,6 +153,7 @@ export async function link(req, userAgent) {
     }
     // On the list now, so any request they left for it is moot.
     await joinRequests.removeFor(institute.id, account.id, db);
+    await keepOneSchool(account.id, institute.id, { via: 'link' }, db);
     await students.refreshInstitutes([account.id], db);
     await students.touchLastLogin(account.id, db);
     return sessionFor(account.id, userAgent, db);
@@ -148,13 +161,15 @@ export async function link(req, userAgent) {
 }
 
 // req: LoginRequest. Same answer for an unknown username, a wrong password
-// and a deleted account, and all three take about as long.
+// and a deleted account, and all three take about as long. A deactivated
+// account is told so, but only once the password matched.
 export async function login(req, userAgent) {
   const found = await students.findByUsername(req.username);
   const ok = await verifyPassword(req.password, found ? found.password : DUMMY_HASH);
   if (!found || !ok || found.is_deleted) {
     throw new ApiError(401, 'bad_credentials', 'Username or password is incorrect.');
   }
+  if (found.deactivated_at) throw accountDeactivated();
   await students.touchLastLogin(found.id);
   return sessionFor(found.id, userAgent);
 }

@@ -2,10 +2,13 @@
 // app. They may while any institute list they're on has a subscription
 // covering today; otherwise the paywall shows `message`.
 // reason: not_subscribed | pending_approval (they asked to join an institute
-// they aren't on the list of, and an admin hasn't approved it yet)
+// they aren't on the list of, and an admin hasn't approved it yet) |
+// no_institute (on no institute's list: they left, or were removed)
 export const INACTIVE_MESSAGE = "Your account is INACTIVE your school hasn't subscribed yet";
 export const PENDING_MESSAGE = 'Your account is waiting for approval from your institute';
-const MESSAGES = { not_subscribed: INACTIVE_MESSAGE, pending_approval: PENDING_MESSAGE };
+export const NO_INSTITUTE_MESSAGE = "You're not on any institute's list right now. " +
+  "If you've joined a new school or coaching centre, ask them to add you to their list.";
+const MESSAGES = { not_subscribed: INACTIVE_MESSAGE, pending_approval: PENDING_MESSAGE, no_institute: NO_INSTITUTE_MESSAGE };
 
 export class AccessDTO {
   constructor({ hasAccess, reason = null, institute = null, endsAt = null }) {
@@ -30,6 +33,10 @@ export class AccessDTO {
 
   static denied(institute) {
     return new AccessDTO({ hasAccess: false, reason: 'not_subscribed', institute });
+  }
+
+  static noInstitute() {
+    return new AccessDTO({ hasAccess: false, reason: 'no_institute' });
   }
 
   static pending(institute) {

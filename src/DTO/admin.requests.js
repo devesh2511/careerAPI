@@ -105,6 +105,60 @@ export class SetStudentPasswordRequest {
   }
 }
 
+// The note an admin leaves on a support action (why, who asked). Required.
+function adminNote(body) {
+  const note = str(body.note).trim().replace(/\s+/g, ' ');
+  if (!note) throw ApiError.invalid('Add a note: why, and who asked.', 'note');
+  if (note.length > 500) throw ApiError.invalid('The note must be at most 500 characters.', 'note');
+  return note;
+}
+
+// POST /admin/students/:id/deactivate  { reason, institute_id?, note }
+// malpractice locks the whole account; left_institute only takes them off
+// that institute's list.
+export class DeactivateStudentRequest {
+  constructor(body = {}) {
+    this.reason = body.reason;
+    if (this.reason !== 'malpractice' && this.reason !== 'left_institute') {
+      throw ApiError.invalid('Pick a reason.', 'reason');
+    }
+    this.instituteId = null;
+    if (this.reason === 'left_institute') {
+      const id = Number(body.institute_id);
+      if (!Number.isInteger(id) || id < 1 || id > INT_MAX) throw ApiError.invalid('Pick the institute they left.', 'institute_id');
+      this.instituteId = id;
+    }
+    this.note = adminNote(body);
+  }
+}
+
+// POST /admin/students/:id/reactivate  { note }
+export class ReactivateStudentRequest {
+  constructor(body = {}) {
+    this.note = adminNote(body);
+  }
+}
+
+// PATCH /admin/students/:id/details  { full_name?, phone_no?, note }
+export class StudentDetailsRequest {
+  constructor(body = {}) {
+    const has = key => Object.prototype.hasOwnProperty.call(body, key);
+    this.name = null;
+    this.phoneNo = null;
+    if (has('full_name')) {
+      this.name = normName(body.full_name);
+      if (!this.name) throw ApiError.invalid('Enter their full name.', 'full_name');
+      if (this.name.length > 80) throw ApiError.invalid('Full name must be at most 80 characters.', 'full_name');
+    }
+    if (has('phone_no')) {
+      this.phoneNo = normPhone(body.phone_no);
+      if (!this.phoneNo) throw ApiError.invalid('Enter a 10-digit mobile number.', 'phone_no');
+    }
+    if (!this.name && !this.phoneNo) throw ApiError.invalid('Change the name or the phone number.', 'full_name');
+    this.note = adminNote(body);
+  }
+}
+
 // POST /admin/contests  { date: 'YYYY-MM-DD' }, a Saturday in the future.
 export class CreateContestRequest {
   constructor(body = {}) {

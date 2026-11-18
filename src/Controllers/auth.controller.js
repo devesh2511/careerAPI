@@ -1,13 +1,15 @@
 // Student registration and login (docs/openapi.yaml → Auth).
 //   POST /auth/register/check   POST /auth/register   POST /auth/register/link
 //   POST /auth/login   POST /auth/logout
-//   POST /auth/forgot-password   POST /auth/reset-password
+//   POST /auth/forgot-password   POST /auth/reset-password   POST /auth/confirm-email
 import { Router } from 'express';
 import {
   ListEntryRequest, RegisterRequest, LinkRequest, LoginRequest, ForgotPasswordRequest, ResetPasswordRequest,
+  ConfirmEmailRequest,
 } from '../DTO/auth.requests.js';
 import * as authService from '../Services/auth.service.js';
 import * as studentPassword from '../Services/student.password.service.js';
+import * as emailConfirm from '../Services/email.confirm.service.js';
 import { setSessionCookie, clearSessionCookie, readSessionCookie } from './session.cookie.js';
 
 export const authController = Router();
@@ -49,5 +51,11 @@ authController.post('/forgot-password', async (req, res) => {
 authController.post('/reset-password', async (req, res) => {
   await studentPassword.resetPassword(new ResetPasswordRequest(req.body));
   clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+// From the emailed "Confirm your email" link. No login needed.
+authController.post('/confirm-email', async (req, res) => {
+  await emailConfirm.confirm(new ConfirmEmailRequest(req.body));
   res.json({ ok: true });
 });

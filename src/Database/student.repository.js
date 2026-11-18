@@ -27,7 +27,8 @@ export async function findByUsername(username, db = defaultDb) {
 }
 
 export async function findLiveByUsername(username, db = defaultDb) {
-  const { rows } = await db.query('SELECT * FROM user_metadata WHERE username = $1 AND NOT is_deleted', [username]);
+  const { rows } = await db.query(
+    'SELECT * FROM user_metadata WHERE username = $1 AND NOT is_deleted AND deactivated_at IS NULL', [username]);
   return rows[0] || null;
 }
 
@@ -92,6 +93,7 @@ export async function refreshInstitutes(studentIds, db = defaultDb) {
 // ending subscription covering now on any list the student is on (from a
 // live, active institute).
 // pending: the institute they've asked to join (join_requests), if any.
+// on_list: on at least one live institute's list (else they're on none).
 // Selected alongside user_metadata m LEFT JOIN institute i (ACCESS_FROM).
 const ACCESS_FACTS = `
             i.name AS institute_name, i.type AS institute_type,
@@ -107,7 +109,9 @@ const ACCESS_FACTS = `
                  FROM join_requests r
                  JOIN institute ri ON ri.id = r.institute_id AND NOT ri.is_deleted
                 WHERE r.metadata_id = m.id
-                ORDER BY r.created_at LIMIT 1) x) AS pending`;
+                ORDER BY r.created_at LIMIT 1) x) AS pending,
+            EXISTS (SELECT 1 FROM "user" u JOIN institute oi ON oi.id = u.institute_id AND NOT oi.is_deleted
+                     WHERE u.metadata_id = m.id) AS on_list`;
 const ACCESS_FROM = 'user_metadata m LEFT JOIN institute i ON i.id = m.institute_id AND NOT i.is_deleted';
 
 export async function findAccessFacts(studentId, db = defaultDb) {
@@ -118,14 +122,15 @@ export async function findAccessFacts(studentId, db = defaultDb) {
 
 // ── Admin panel ───────────────────────────────────────────────────────────
 // A–Z, each account with its access facts. pattern is an ILIKE pattern on
-// name, username, phone or email ('' for all).
-export async function listForAdmin({ deleted, pattern }, db = defaultDb) {
+// name, username, phone or email ('' for all). deactivated: only
+// deactivated accounts (deleted or not), else deleted picks the tab.
+export async function listForAdmin({ deleted, deactivated = false, pattern }, db = defaultDb) {
   const { rows } = await db.query(
     `SELECT m.*, ${ACCESS_FACTS} FROM ${ACCESS_FROM}
-      WHERE m.is_deleted = $1
+      WHERE (CASE WHEN $3 THEN m.deactivated_at IS NOT NULL ELSE m.is_deleted = $1 END)
         AND ($2 = '' OR m.name ILIKE $2 OR m.username ILIKE $2 OR m.phone_no ILIKE $2 OR m.email ILIKE $2)
       ORDER BY m.name, m.username`,
-    [deleted, pattern]);
+    [deleted, pattern, deactivated]);
   return rows;
 }
 
@@ -139,10 +144,55 @@ export async function countAccess(db = defaultDb) {
   return rows[0];
 }
 
-// One account with its access facts, deleted or not. null when no such id.
+// One account with its access facts, deleted or not, and the name of the
+// admin who deactivated it. null when no such id.
 export async function findForAdmin(studentId, db = defaultDb) {
-  const { rows } = await db.query(`SELECT m.*, ${ACCESS_FACTS} FROM ${ACCESS_FROM} WHERE m.id = $1`, [studentId]);
+  const { rows } = await db.query(
+    `SELECT m.*, ${ACCESS_FACTS},
+            (SELECT a.full_name FROM admins a WHERE a.id = m.deactivated_by) AS deactivated_by_name
+       FROM ${ACCESS_FROM} WHERE m.id = $1`,
+    [studentId]);
   return rows[0] || null;
+}
+
+// The account, locked for a change by an admin. null when no such id.
+export async function findForUpdate(studentId, db = defaultDb) {
+  const { rows } = await db.query('SELECT * FROM user_metadata WHERE id = $1 FOR UPDATE', [studentId]);
+  return rows[0] || null;
+}
+
+// ── Deactivation (malpractice) ────────────────────────────────────────────
+// Locks the account and ends every session. Its data stays.
+export async function deactivate(studentId, { reason, note, adminId }, db = defaultDb) {
+  await db.query(
+    `UPDATE user_metadata
+        SET deactivated_at = now(), deactivation_reason = $2, deactivation_note = $3, deactivated_by = $4
+      WHERE id = $1`,
+    [studentId, reason, note, adminId]);
+  await db.query('DELETE FROM sessions WHERE student_id = $1', [studentId]);
+}
+
+export async function reactivate(studentId, db = defaultDb) {
+  await db.query(
+    `UPDATE user_metadata
+        SET deactivated_at = NULL, deactivation_reason = NULL, deactivation_note = NULL, deactivated_by = NULL
+      WHERE id = $1`,
+    [studentId]);
+}
+
+// ── Name and phone, corrected by an admin ─────────────────────────────────
+// Another account that is this person (name ignoring case + phone). null if none.
+export async function findOtherByPerson(studentId, { name, phoneNo }, db = defaultDb) {
+  const { rows } = await db.query(
+    'SELECT id, username FROM user_metadata WHERE phone_no = $2 AND lower(name) = lower($3) AND id <> $1',
+    [studentId, phoneNo, name]);
+  return rows[0] || null;
+}
+
+// The account and every list row linked to it take the new name + phone.
+export async function setPerson(studentId, { name, phoneNo }, db = defaultDb) {
+  await db.query('UPDATE "user" SET name = $2, phone_no = $3 WHERE metadata_id = $1', [studentId, name, phoneNo]);
+  await db.query('UPDATE user_metadata SET name = $2, phone_no = $3 WHERE id = $1', [studentId, name, phoneNo]);
 }
 
 export async function exists(studentId, db = defaultDb) {
@@ -197,7 +247,7 @@ export async function findResetLink(tokenHash, db = defaultDb) {
   const { rows } = await db.query(
     `SELECT r.student_id, r.email
        FROM student_reset_links r JOIN user_metadata m ON m.id = r.student_id
-      WHERE r.token_hash = $1 AND r.expires_at > now() AND NOT m.is_deleted
+      WHERE r.token_hash = $1 AND r.expires_at > now() AND NOT m.is_deleted AND m.deactivated_at IS NULL
       FOR UPDATE OF r`,
     [tokenHash]);
   return rows[0] || null;
@@ -211,4 +261,42 @@ export async function verifyEmail(studentId, email, db = defaultDb) {
 
 export async function deleteResetLink(studentId, db = defaultDb) {
   await db.query('DELETE FROM student_reset_links WHERE student_id = $1', [studentId]);
+}
+
+// A changed or removed email: links already sent to the old one must not
+// confirm it or put it back (a reset link sets the email it was sent to).
+export async function deleteEmailLinks(studentId, db = defaultDb) {
+  await db.query('DELETE FROM student_reset_links WHERE student_id = $1', [studentId]);
+  await db.query('DELETE FROM student_email_confirmations WHERE student_id = $1', [studentId]);
+}
+
+// ── Email confirmation links ──────────────────────────────────────────────
+// Like upsertResetLink: false when held back by the cooldown.
+export async function upsertConfirmLink({ studentId, tokenHash, email, lifetimeHours, cooldownSeconds }, db = defaultDb) {
+  const { rowCount } = await db.query(
+    `INSERT INTO student_email_confirmations (student_id, token_hash, email, expires_at)
+     VALUES ($1, $2, $3, now() + make_interval(hours => $4))
+     ON CONFLICT (student_id) DO UPDATE
+       SET token_hash = EXCLUDED.token_hash, email = EXCLUDED.email,
+           created_at = now(), expires_at = EXCLUDED.expires_at
+       WHERE student_email_confirmations.created_at < now() - make_interval(secs => $5)
+          OR student_email_confirmations.email IS DISTINCT FROM EXCLUDED.email`,
+    [studentId, tokenHash, email, lifetimeHours, cooldownSeconds]);
+  return rowCount > 0;
+}
+
+// The unexpired link, locked, with the account's current email. null when
+// it's wrong, expired, or the account is deleted or deactivated.
+export async function findConfirmLink(tokenHash, db = defaultDb) {
+  const { rows } = await db.query(
+    `SELECT c.student_id, c.email, m.email AS current_email
+       FROM student_email_confirmations c JOIN user_metadata m ON m.id = c.student_id
+      WHERE c.token_hash = $1 AND c.expires_at > now() AND NOT m.is_deleted AND m.deactivated_at IS NULL
+      FOR UPDATE OF c`,
+    [tokenHash]);
+  return rows[0] || null;
+}
+
+export async function deleteConfirmLink(studentId, db = defaultDb) {
+  await db.query('DELETE FROM student_email_confirmations WHERE student_id = $1', [studentId]);
 }

@@ -17,9 +17,15 @@ export async function setCareer(studentId, req) {
   await students.setCareer(studentId, req.career);
 }
 
-// req: AccountRequest. Returns the updated student.
+// req: AccountRequest. Returns the updated student. A changed email is
+// unconfirmed, and links sent to the old one stop working.
 export async function setDetails(studentId, req) {
-  return toStudentDTO(await students.setDetails(studentId, req.details));
+  return withTransaction(async db => {
+    const before = await students.findById(studentId, db);
+    const row = await students.setDetails(studentId, req.details, db);
+    if (before.email !== row.email) await students.deleteEmailLinks(studentId, db);
+    return toStudentDTO(row, db);
+  });
 }
 
 // GET /me/profile. class, board and city are known from registration, so
@@ -32,7 +38,11 @@ export async function getProfile(studentId, db) {
 // req: ProfileRequest. Only the answers in the request change.
 export async function saveProfile(studentId, req) {
   return withTransaction(async db => {
-    if (Object.keys(req.details).length) await students.setDetails(studentId, req.details, db);
+    if (Object.keys(req.details).length) {
+      const before = await students.findById(studentId, db);
+      const row = await students.setDetails(studentId, req.details, db);
+      if (before.email !== row.email) await students.deleteEmailLinks(studentId, db);
+    }
     if (Object.keys(req.fields).length) await profiles.upsert(studentId, req.fields, db);
     return getProfile(studentId, db);
   });

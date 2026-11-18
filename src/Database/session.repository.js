@@ -17,7 +17,7 @@ export async function findStudentBySession(tokenHash, db = defaultDb) {
   const { rows } = await db.query(
     `SELECT m.*, se.last_seen_at
        FROM sessions se JOIN user_metadata m ON m.id = se.student_id
-      WHERE se.token_hash = $1 AND se.expires_at > now() AND NOT m.is_deleted`,
+      WHERE se.token_hash = $1 AND se.expires_at > now() AND NOT m.is_deleted AND m.deactivated_at IS NULL`,
     [tokenHash]);
   return rows[0] || null;
 }

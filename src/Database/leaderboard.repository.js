@@ -31,7 +31,7 @@ export async function board({ contestId, career, studentId, limit }, db = defaul
               (RANK() OVER w)::int AS rank,
               ROW_NUMBER() OVER (ORDER BY src.score DESC, src.time_taken_s, s.name, s.id) AS pos,
               (COUNT(*) OVER ())::int AS total
-         FROM src JOIN user_metadata s ON s.id = src.student_id AND NOT s.is_deleted
+         FROM src JOIN user_metadata s ON s.id = src.student_id AND NOT s.is_deleted AND s.deactivated_at IS NULL
         WHERE ($2::text IS NULL OR s.current_career = $2 OR s.id = $1)
        WINDOW w AS (ORDER BY src.score DESC, src.time_taken_s)
      )
@@ -58,7 +58,7 @@ export async function results({ studentId, career, contestId = null }, db = defa
                             ORDER BY a.score DESC, a.time_taken_s))::int AS career_rank,
               (COUNT(*) OVER (PARTITION BY a.contest_id, s.current_career = $2))::int AS career_total
          FROM attempts a
-         JOIN user_metadata s ON s.id = a.student_id AND NOT s.is_deleted
+         JOIN user_metadata s ON s.id = a.student_id AND NOT s.is_deleted AND s.deactivated_at IS NULL
          JOIN contests c ON c.id = a.contest_id
         WHERE ${CLOSED} AND a.score IS NOT NULL AND ($3::int IS NULL OR a.contest_id = $3)
      )
