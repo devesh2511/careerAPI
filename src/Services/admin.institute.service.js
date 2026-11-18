@@ -11,11 +11,13 @@ import { withTransaction } from '../Database/db.js';
 import * as institutes from '../Database/institute.repository.js';
 import * as studentList from '../Database/studentList.repository.js';
 import * as subscriptions from '../Database/subscription.repository.js';
+import * as joinRequests from '../Database/joinRequest.repository.js';
 import { refreshInstitutes } from '../Database/student.repository.js';
 import { ApiError } from '../DTO/ApiError.js';
 import { InstituteDTO } from '../DTO/InstituteDTO.js';
 import { SubscriptionDTO, PaymentDTO, guardDuplicatePayment } from '../DTO/SubscriptionDTO.js';
 import { parseStudentList } from './studentList.parser.js';
+import { accessFor } from './access.service.js';
 
 // A taken institute ID becomes a 409 on that field.
 async function guardUnique(fn) {
@@ -137,6 +139,64 @@ export async function removeStudent(instituteId, key) {
     const linked = await studentList.remove({ instituteId, name: key.name, phoneNo: key.phoneNo }, db);
     if (linked === undefined) throw ApiError.notFound('student');
     if (linked) await refreshInstitutes([linked], db);
+  });
+}
+
+// ── Join requests ─────────────────────────────────────────────────────────
+// Students not on the list of an institute with accepts_requests, asking to
+// join it. Their account exists already; approving is what activates it.
+export async function listRequests(instituteId) {
+  await mustExist(instituteId);
+  return (await joinRequests.listForInstitute(instituteId)).map(r => ({
+    id: r.id,
+    requested_at: r.created_at,
+    full_name: r.name,
+    phone_no: r.phone_no,
+    student: {
+      id: r.student_id, username: r.username, email: r.email, class: r.class, board: r.board, city: r.city,
+      is_deleted: r.is_deleted,
+    },
+  }));
+}
+
+// Adds them to the list, registered and on the institute's current
+// subscription (so they have access straight away), and deletes the request.
+// The headcount isn't enforced here: the result says when it's exceeded.
+export async function approveRequest(instituteId, requestId, adminId) {
+  const institute = await institutes.findForAdmin(instituteId);
+  if (!institute) throw ApiError.notFound('institute');
+  if (institute.is_deleted) throw new ApiError(409, 'institute_deleted', 'Restore this institute before approving requests.');
+  return withTransaction(async db => {
+    const r = await joinRequests.findForUpdate(instituteId, requestId, db);
+    if (!r) throw ApiError.notFound('request');
+    const sub = await subscriptions.findCurrent(instituteId, db);
+    if (!sub) {
+      throw new ApiError(409, 'no_current_subscription',
+        "This institute has no subscription covering today, so approving wouldn't activate the account. " +
+        'Upload a student list (that creates one), then approve.');
+    }
+    await studentList.addRegistered({
+      instituteId, name: r.name, phoneNo: r.phone_no, studentId: r.metadata_id, subscriptionId: sub.id, adminId,
+    }, db);
+    await joinRequests.remove(r.id, db);
+    await refreshInstitutes([r.metadata_id], db);
+    const students = sub.students + 1;
+    return {
+      // has_access false if the institute is suspended (or they were uploaded
+      // meanwhile onto a subscription that isn't current).
+      student: { id: r.metadata_id, username: r.username, has_access: (await accessFor(r.metadata_id, db)).has_access },
+      subscription: { id: sub.id, head_count: sub.head_count, students, ends_at: sub.ends_at },
+      over_headcount: students > sub.head_count,
+    };
+  });
+}
+
+// Deletes the request. The account stays, without this institute.
+export async function rejectRequest(instituteId, requestId) {
+  await mustExist(instituteId);
+  await withTransaction(async db => {
+    if (!(await joinRequests.findForUpdate(instituteId, requestId, db))) throw ApiError.notFound('request');
+    await joinRequests.remove(requestId, db);
   });
 }
 

@@ -26,6 +26,19 @@ export async function insert({ instituteId, headCount, startsAt, endsAt, adminId
   return rows[0];
 }
 
+// The institute's subscription covering now (the latest-ending one if
+// several do), with how many list rows are on it. null when none does.
+export async function findCurrent(instituteId, db = defaultDb) {
+  const { rows } = await db.query(
+    `SELECT s.*, (SELECT count(*)::int FROM "user" u WHERE u.subscription_id = s.id) AS students
+       FROM subscription s
+      WHERE s.institute_id = $1 AND now() >= s.starts_at AND now() < s.ends_at
+      ORDER BY s.ends_at DESC, s.id DESC
+      LIMIT 1`,
+    [instituteId]);
+  return rows[0] || null;
+}
+
 // The subscription, locked, when it belongs to this institute. null otherwise.
 export async function findForUpdate(instituteId, subscriptionId, db = defaultDb) {
   const { rows } = await db.query(

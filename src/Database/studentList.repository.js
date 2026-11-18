@@ -38,6 +38,20 @@ export async function claim({ instituteId, name, phoneNo, studentId }, db = defa
   return rowCount > 0;
 }
 
+// An approved join request: puts the account on the list, registered, on
+// this subscription. If the admin uploaded them meanwhile, that row is
+// linked instead (keeping its subscription, if it has one).
+export async function addRegistered({ instituteId, name, phoneNo, studentId, subscriptionId, adminId }, db = defaultDb) {
+  await db.query(
+    `INSERT INTO "user" (institute_id, name, phone_no, status, subscription_id, metadata_id, registered_at, added_by)
+     VALUES ($1, $2, $3, 'registered', $4, $5, now(), $6)
+     ON CONFLICT (institute_id, phone_no, lower(name)) DO UPDATE
+       SET metadata_id = EXCLUDED.metadata_id, status = 'registered',
+           registered_at = coalesce("user".registered_at, now()),
+           subscription_id = coalesce("user".subscription_id, EXCLUDED.subscription_id)`,
+    [instituteId, name, phoneNo, subscriptionId, studentId, adminId]);
+}
+
 // Adds the rows to the list on this subscription. Rows already on the list
 // (a renewal) move to it instead. → { added, renewed } counts.
 export async function upsertMany(instituteId, entries, subscriptionId, adminId, db = defaultDb) {

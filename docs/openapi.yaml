@@ -120,6 +120,12 @@ paths:
         institute gave them. `new`: go on to `POST /auth/register`.
         `existing_account`: this person already has an account (from another
         institute), so ask for its password and call `POST /auth/register/link`.
+
+        An institute with `accepts_requests` also takes students who aren't on
+        its list: then `needs_approval` is true, and finishing either step
+        creates (or links) the account with a join request instead of a list
+        place. The account has no access (`pending_approval`) until an admin
+        approves the request.
       security: []
       requestBody:
         required: true
@@ -135,11 +141,12 @@ paths:
                 type: object
                 properties:
                   status: { type: string, enum: [new, existing_account] }
-                  username: { type: string, description: 'Only with `existing_account`' }
+                  username: { type: string, description: 'Only with `existing_account`, and not with `needs_approval` (anyone with an open institute''s ID could look it up)' }
+                  needs_approval: { type: boolean, description: 'Not on the list: finishing leaves a join request for an admin to approve' }
         '400': { $ref: '#/components/responses/Invalid' }
         '403': { description: '`account_disabled`: their account was switched off by an admin', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '404': { description: '`not_on_list`: no such name + phone on that (active) institute''s list', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '409': { description: '`already_registered`: this list row already has an account', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: '`already_registered`: this list row already has an account. `request_pending`: this account has already asked to join this institute', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /auth/register:
     post:
@@ -217,7 +224,7 @@ paths:
         '401': { description: '`bad_credentials`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '403': { description: '`account_disabled`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '404': { description: '`not_on_list`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '409': { description: '`already_registered`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: '`already_registered`. `request_pending`: this account has already asked to join this institute', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /auth/login:
     post:
@@ -1331,6 +1338,74 @@ paths:
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /admin/institutes/{id}/requests:
+    parameters:
+      - $ref: '#/components/parameters/InstituteId'
+    get:
+      tags: [Admin · Institutes]
+      summary: Join requests waiting for approval
+      description: |
+        Students who aren't on the list of an institute with
+        `accepts_requests`, and registered (or linked their account) with its
+        institute ID. Their account exists but has no access until approved.
+      security: [{ adminSession: [] }]
+      responses:
+        '200':
+          description: Oldest first
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/JoinRequest' } }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/institutes/{id}/requests/{requestId}/approve:
+    parameters:
+      - $ref: '#/components/parameters/InstituteId'
+      - { name: requestId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [Admin · Institutes]
+      summary: Approve a join request
+      description: |
+        Adds the student to the list, registered and on the institute's
+        current subscription, so their account is active straight away, and
+        deletes the request. The headcount isn't enforced; `over_headcount`
+        says when the subscription now has more students than it.
+      security: [{ adminSession: [] }]
+      responses:
+        '200':
+          description: Approved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  student: { type: object, properties: { id: { type: integer }, username: { type: string }, has_access: { type: boolean, description: 'false if the institute is suspended' } } }
+                  subscription:
+                    type: object
+                    properties:
+                      id: { type: integer }
+                      head_count: { type: integer }
+                      students: { type: integer, description: On it now, including this student }
+                      ends_at: { type: string, format: date-time }
+                  over_headcount: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: '`no_current_subscription`: nothing covers today, so approving wouldn''t activate them. `institute_deleted`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/institutes/{id}/requests/{requestId}:
+    parameters:
+      - $ref: '#/components/parameters/InstituteId'
+      - { name: requestId, in: path, required: true, schema: { type: integer } }
+    delete:
+      tags: [Admin · Institutes]
+      summary: Reject a join request
+      description: Deletes the request. The student's account stays, without this institute.
+      security: [{ adminSession: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/Ok' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /admin/institutes/{id}/subscriptions:
     parameters:
       - $ref: '#/components/parameters/InstituteId'
@@ -1931,8 +2006,10 @@ components:
 
     AccessReason:
       type: [string, 'null']
-      enum: [not_subscribed, null]
-      description: '`not_subscribed`: no institute list they''re on has a subscription covering today'
+      enum: [not_subscribed, pending_approval, null]
+      description: |
+        `not_subscribed`: no institute list they're on has a subscription covering today.
+        `pending_approval`: same, and they've asked to join an institute (join request) that an admin hasn't approved yet.
 
     Access:
       type: object
@@ -1945,7 +2022,7 @@ components:
           description: What the paywall shows when there's no access
           example: Your account is INACTIVE your school hasn't subscribed yet
         institute:
-          description: The institute whose subscription covers them, else the one their account shows
+          description: The institute whose subscription covers them, else the one they're waiting on (`pending_approval`), else the one their account shows
           oneOf:
             - { type: object, properties: { name: { type: string }, institute_code: { type: string } } }
             - type: 'null'
@@ -2115,6 +2192,25 @@ components:
         city: { type: string, maxLength: 80 }
         contact_details: { type: [string, 'null'], maxLength: 255 }
         status: { type: string, enum: [active, suspended], default: active }
+        accepts_requests: { type: boolean, default: false, description: 'Students not on its list may register and ask to join; an admin approves each. Left out on update: unchanged' }
+
+    JoinRequest:
+      type: object
+      properties:
+        id: { type: integer }
+        requested_at: { type: string, format: date-time }
+        full_name: { type: string }
+        phone_no: { type: string }
+        student:
+          type: object
+          properties:
+            id: { type: integer }
+            username: { type: string }
+            email: { type: [string, 'null'] }
+            class: { type: integer }
+            board: { type: string }
+            city: { type: string }
+            is_deleted: { type: boolean }
 
     Institute:
       allOf:
@@ -2128,6 +2224,7 @@ components:
             updated_at: { type: string, format: date-time }
             list_count: { type: integer, description: Students on its list }
             registered_count: { type: integer, description: Of those, how many have registered }
+            pending_count: { type: integer, description: Join requests waiting for approval }
             subscription:
               description: The current subscription, else the latest one, else null
               oneOf:

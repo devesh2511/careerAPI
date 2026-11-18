@@ -56,6 +56,25 @@ adminInstitutesController.delete('/:id/students', async (req, res) => {
   res.json({ ok: true });
 });
 
+// Join requests from students not on the list (institutes with accepts_requests).
+const requestId = req => intId(req.params.requestId, 'request');
+
+adminInstitutesController.get('/:id/requests', async (req, res) => {
+  res.json(await institutes.listRequests(instituteId(req)));
+});
+
+adminInstitutesController.post('/:id/requests/:requestId/approve', async (req, res) => {
+  const id = instituteId(req);
+  res.json(await institutes.approveRequest(id, requestId(req), req.admin.id));
+});
+
+// Reject.
+adminInstitutesController.delete('/:id/requests/:requestId', async (req, res) => {
+  const id = instituteId(req);
+  await institutes.rejectRequest(id, requestId(req));
+  res.json({ ok: true });
+});
+
 adminInstitutesController.get('/:id/subscriptions', async (req, res) => {
   res.json(await institutes.listSubscriptions(instituteId(req)));
 });

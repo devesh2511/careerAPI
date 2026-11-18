@@ -9,12 +9,15 @@ export class InstituteDTO {
     this.city = row.city;
     this.contact_details = row.contact_details;
     this.status = row.status;
+    this.accepts_requests = row.accepts_requests;
     this.is_deleted = row.is_deleted;
     this.deleted_at = row.deleted_at;
     this.created_at = row.created_at;
     this.updated_at = row.updated_at;
     this.list_count = row.list_count;
     this.registered_count = row.registered_count;
+    // Join requests waiting for an admin.
+    this.pending_count = row.pending_count;
     // The current subscription, else the latest one, else null. row_to_json
     // gives '…+00:00'; the API always sends '…Z'.
     const s = row.subscription;

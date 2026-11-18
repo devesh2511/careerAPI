@@ -2,10 +2,11 @@
 import { db as defaultDb } from './db.js';
 
 // An institute students can register through: active and not deleted. Codes
-// are stored upper-case.
+// are stored upper-case. accepts_requests: students not on its list may ask
+// to join (join_requests) instead of being turned away.
 export async function findJoinableByCode(instituteCode, db = defaultDb) {
   const { rows } = await db.query(
-    `SELECT id, name, institute_code, type FROM institute
+    `SELECT id, name, institute_code, type, accepts_requests FROM institute
       WHERE institute_code = $1 AND status = 'active' AND NOT is_deleted`,
     [instituteCode]);
   return rows[0] || null;
@@ -25,6 +26,7 @@ const ADMIN_SELECT = `
   SELECT i.*,
          (SELECT count(*)::int FROM "user" u WHERE u.institute_id = i.id) AS list_count,
          (SELECT count(*)::int FROM "user" u WHERE u.institute_id = i.id AND u.status = 'registered') AS registered_count,
+         (SELECT count(*)::int FROM join_requests r WHERE r.institute_id = i.id) AS pending_count,
          (SELECT row_to_json(x) FROM (
             SELECT s.id, now() >= s.starts_at AND now() < s.ends_at AS active, s.head_count,
                    s.starts_at, s.ends_at, s.payment_id IS NOT NULL AS paid
@@ -58,19 +60,21 @@ export async function exists(instituteId, db = defaultDb) {
 // A taken institute ID surfaces as 23505 on institute_institute_code_key.
 export async function insert(s, adminId, db = defaultDb) {
   const { rows } = await db.query(
-    `INSERT INTO institute (institute_code, type, name, address, city, contact_details, status, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-    [s.institute_code, s.type, s.name, s.address, s.city, s.contact_details, s.status, adminId]);
+    `INSERT INTO institute (institute_code, type, name, address, city, contact_details, status, created_by, accepts_requests)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+    [s.institute_code, s.type, s.name, s.address, s.city, s.contact_details, s.status, adminId, s.accepts_requests ?? false]);
   return rows[0].id;
 }
 
-// The accounts that show this institute get its new code too.
+// The accounts that show this institute get its new code too. An omitted
+// accepts_requests (undefined) keeps the current setting.
 export async function update(instituteId, s, db = defaultDb) {
   const { rowCount } = await db.query(
     `UPDATE institute SET institute_code = $2, type = $3, name = $4, address = $5, city = $6,
-                          contact_details = $7, status = $8
+                          contact_details = $7, status = $8, accepts_requests = coalesce($9, accepts_requests)
       WHERE id = $1`,
-    [instituteId, s.institute_code, s.type, s.name, s.address, s.city, s.contact_details, s.status]);
+    [instituteId, s.institute_code, s.type, s.name, s.address, s.city, s.contact_details, s.status,
+      s.accepts_requests ?? null]);
   if (rowCount) {
     await db.query('UPDATE user_metadata SET institute_code = $2 WHERE institute_id = $1', [instituteId, s.institute_code]);
   }

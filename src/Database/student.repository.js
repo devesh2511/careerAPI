@@ -91,6 +91,7 @@ export async function refreshInstitutes(studentIds, db = defaultDb) {
 // For the access check: the institute the account shows, and the latest-
 // ending subscription covering now on any list the student is on (from a
 // live, active institute).
+// pending: the institute they've asked to join (join_requests), if any.
 // Selected alongside user_metadata m LEFT JOIN institute i (ACCESS_FROM).
 const ACCESS_FACTS = `
             i.name AS institute_name, i.type AS institute_type,
@@ -100,7 +101,13 @@ const ACCESS_FACTS = `
                  JOIN subscription s ON s.id = u.subscription_id
                  JOIN institute li ON li.id = u.institute_id AND li.status = 'active' AND NOT li.is_deleted
                 WHERE u.metadata_id = m.id AND now() >= s.starts_at AND now() < s.ends_at
-                ORDER BY s.ends_at DESC LIMIT 1) x) AS plan`;
+                ORDER BY s.ends_at DESC LIMIT 1) x) AS plan,
+            (SELECT row_to_json(x) FROM (
+               SELECT ri.name, ri.institute_code
+                 FROM join_requests r
+                 JOIN institute ri ON ri.id = r.institute_id AND NOT ri.is_deleted
+                WHERE r.metadata_id = m.id
+                ORDER BY r.created_at LIMIT 1) x) AS pending`;
 const ACCESS_FROM = 'user_metadata m LEFT JOIN institute i ON i.id = m.institute_id AND NOT i.is_deleted';
 
 export async function findAccessFacts(studentId, db = defaultDb) {

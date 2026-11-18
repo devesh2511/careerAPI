@@ -180,6 +180,10 @@ export class InstituteRequest {
     this.city = text('city', 'City', { max: 80, required: true });
     this.contact_details = text('contact_details', 'Contact details', { max: 255 });
     this.status = body.status === 'suspended' ? 'suspended' : 'active';
+    // Students not on the list may ask to join (an admin approves each).
+    // true / 'true' or false / 'false'; left out: unchanged on update, off on create.
+    const ar = body.accepts_requests;
+    this.accepts_requests = ar === true || ar === 'true' ? true : ar === false || ar === 'false' ? false : undefined;
   }
 }
 
