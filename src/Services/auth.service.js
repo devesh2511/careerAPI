@@ -12,6 +12,15 @@
 // students who aren't on its list: the same steps create the account (or
 // check the existing one's password), but instead of joining the list they
 // leave a join request, and have no access until an admin approves it.
+//
+// An institute whose pilot is live (020_pilot_mode.sql) takes students who
+// aren't on its list too, with access straight away: the same steps put
+// them on the list tagged via_pilot, without a subscription, up to a seat
+// limit per class. When the pilot ends or that class is full, an institute
+// with accepts_requests falls back to join requests. A pilot sign-up never
+// touches other lists: no claiming rows elsewhere, and a school's pilot
+// turns away anyone already on another school's list, so a pilot can't take
+// someone off a paying school's list.
 import { withTransaction } from '../Database/db.js';
 import * as students from '../Database/student.repository.js';
 import * as studentList from '../Database/studentList.repository.js';
@@ -35,18 +44,48 @@ const accountDisabled = () => new ApiError(403, 'account_disabled',
 // accounts are deactivated.
 const accountDeactivated = () => new ApiError(403, 'account_deactivated',
   'Your account has been deactivated. Please contact your institute.');
+const alreadyAtSchool = () => new ApiError(409, 'already_at_school',
+  "You're already on another school's list, so you can't join this school's trial. Please contact your school.");
+// onField: put it under the class picker (registration, where they chose it).
+const pilotFull = (cls, onField) => new ApiError(409, 'pilot_full',
+  cls ? `This institute's trial is full for class ${cls}.` : "This institute's trial is full.", onField ? 'class' : undefined);
 const requestPending = () => new ApiError(409, 'request_pending',
   "You've already asked to join this institute. Log in with your username: your account will be activated once it's approved.");
 
 // The institute's list row for this name + phone, locked until `db`'s
 // transaction ends. entry is null when they aren't on the list but the
-// institute takes join requests. Throws not_on_list otherwise.
+// institute takes join requests or has a live pilot (offList decides which).
+// Throws not_on_list otherwise. A live pilot's institute row is locked too,
+// so pilot seats are counted and taken one sign-up at a time.
 async function findEntry(req, db) {
-  const institute = await findJoinableByCode(req.instituteCode, db);
+  let institute = await findJoinableByCode(req.instituteCode, db);
+  if (institute && institute.pilot_live) institute = await findJoinableByCode(req.instituteCode, db, { forUpdate: true });
   if (!institute) throw notOnList();
   const entry = await studentList.findForUpdate({ instituteId: institute.id, name: req.name, phoneNo: req.phoneNo }, db);
-  if (!entry && !institute.accepts_requests) throw notOnList();
+  if (!entry && !institute.accepts_requests && !institute.pilot_live) throw notOnList();
   return { institute, entry };
+}
+
+// Where a student who isn't on the list goes: 'pilot' (a seat for their
+// class is free) or 'request' (a join request). cls: their class, or null
+// when it isn't known yet (step 1 of a new account: any free seat will do).
+// studentId: their account, if they have one. person: { name, phoneNo }.
+// onField: report pilot_full on the class field.
+async function offList(institute, { cls, studentId = null, person, onField = false }, db) {
+  if (institute.pilot_live) {
+    const used = await studentList.pilotSeatsUsed(institute.id, db);
+    const left = c => institute[`pilot_seats_class${c}`] - used[c];
+    if (cls ? left(cls) > 0 : left(9) > 0 || left(10) > 0) {
+      if (institute.type === 'school' &&
+          await studentList.onOtherSchool({ instituteId: institute.id, studentId, ...person }, db)) {
+        throw alreadyAtSchool();
+      }
+      return 'pilot';
+    }
+    if (!institute.accepts_requests) throw pilotFull(cls, onField);
+  }
+  if (institute.accepts_requests) return 'request';
+  throw notOnList();
 }
 
 async function sessionFor(studentId, userAgent, db) {
@@ -57,22 +96,29 @@ async function sessionFor(studentId, userAgent, db) {
 
 // req: ListEntryRequest. Step 1 of registration: is this student on the
 // list, and do they already have an account (then they link, not register)?
-// → { status: 'new' | 'existing_account', username?, needs_approval }
+// → { status: 'new' | 'existing_account', username?, needs_approval, pilot }
 // needs_approval: they aren't on the list, so finishing leaves a join request.
+// pilot: they aren't on the list, and finishing takes a pilot seat (access
+// straight away).
 export async function checkEntry(req) {
   return withTransaction(async db => {
     const { institute, entry } = await findEntry(req, db);
     if (entry && entry.metadata_id) throw alreadyRegistered();
     const person = entry ? { name: entry.name, phoneNo: entry.phone_no } : { name: req.name, phoneNo: req.phoneNo };
     const account = await students.findByPerson(person, db);
-    const needsApproval = !entry;
-    if (!account) return { status: 'new', needs_approval: needsApproval };
-    if (account.is_deleted) throw accountDisabled();
-    if (!needsApproval) return { status: 'existing_account', username: account.username, needs_approval: false };
+    if (entry) {
+      if (!account) return { status: 'new', needs_approval: false, pilot: false };
+      if (account.is_deleted) throw accountDisabled();
+      return { status: 'existing_account', username: account.username, needs_approval: false, pilot: false };
+    }
+    if (account && account.is_deleted) throw accountDisabled();
+    const route = await offList(institute, { cls: account ? account.class : null, studentId: account && account.id, person }, db);
     // Anyone with an open institute's ID gets this far with just a name and
     // phone, so don't tell them the account's username.
+    if (route === 'pilot') return { status: account ? 'existing_account' : 'new', needs_approval: false, pilot: true };
+    if (!account) return { status: 'new', needs_approval: true, pilot: false };
     if (await joinRequests.exists(institute.id, account.id, db)) throw requestPending();
-    return { status: 'existing_account', needs_approval: true };
+    return { status: 'existing_account', needs_approval: true, pilot: false };
   });
 }
 
@@ -92,6 +138,7 @@ export async function register(req, userAgent) {
       throw new ApiError(409, 'account_exists',
         'You already have an account. Enter its password to add this institute to it.');
     }
+    const route = entry ? null : await offList(institute, { cls: req.details.class, person, onField: true }, db);
 
     let student;
     try {
@@ -109,15 +156,18 @@ export async function register(req, userAgent) {
       }
       throw err;
     }
-    if (!entry) {
+    if (route === 'request') {
       await joinRequests.insert(institute.id, student.id, db);
+    } else if (route === 'pilot') {
+      await studentList.addPilot({ instituteId: institute.id, ...person, studentId: student.id, pilotClass: req.details.class }, db);
     } else if (!(await studentList.claim({ instituteId: institute.id, name: entry.name, phoneNo: entry.phone_no, studentId: student.id }, db))) {
       throw alreadyRegistered();
     }
     // One account per person: the other lists they're on (uploaded before
     // they had an account) join it too, keeping one school. Only when they
-    // were found on this list: on the join-request path the name and phone
-    // are just what they typed, and must not claim anyone's seat elsewhere.
+    // were found on this list: on the join-request and pilot paths the name
+    // and phone are just what they typed, and must not claim anyone's seat
+    // elsewhere.
     if (entry) {
       await studentList.claimAllFor(student.id, person, db);
       await keepOneSchool(student.id, institute.id, { via: 'register' }, db);
@@ -130,7 +180,8 @@ export async function register(req, userAgent) {
 // req: LinkRequest. Adds this institute's list row to the student's existing
 // account, after checking that account's password, and logs them in. The
 // frontend then shows their saved details, already filled in. Not on the
-// list (an institute that takes requests): leaves a join request instead.
+// list: takes a pilot seat (live pilot), else leaves a join request (an
+// institute that takes requests).
 export async function link(req, userAgent) {
   const account = await students.findByPerson({ name: req.name, phoneNo: req.phoneNo });
   const ok = await verifyPassword(req.password, account ? account.password : DUMMY_HASH);
@@ -143,7 +194,15 @@ export async function link(req, userAgent) {
   return withTransaction(async db => {
     const { institute, entry } = await findEntry(req, db);
     if (!entry) {
-      if (!(await joinRequests.insert(institute.id, account.id, db))) throw requestPending();
+      const person = { name: account.name, phoneNo: account.phone_no };
+      const route = await offList(institute, { cls: account.class, studentId: account.id, person }, db);
+      if (route === 'pilot') {
+        await studentList.addPilot({ instituteId: institute.id, ...person, studentId: account.id, pilotClass: account.class }, db);
+        await joinRequests.removeFor(institute.id, account.id, db);
+        await students.refreshInstitutes([account.id], db);
+      } else if (!(await joinRequests.insert(institute.id, account.id, db))) {
+        throw requestPending();
+      }
       await students.touchLastLogin(account.id, db);
       return sessionFor(account.id, userAgent, db);
     }

@@ -6,7 +6,7 @@ import { db as defaultDb } from './db.js';
 // The list A–Z, each row with the account it's linked to and its subscription.
 export async function list(instituteId, db = defaultDb) {
   const { rows } = await db.query(
-    `SELECT u.name, u.phone_no, u.status, u.registered_at, u.created_at,
+    `SELECT u.name, u.phone_no, u.status, u.registered_at, u.created_at, u.via_pilot,
             m.id AS student_id, m.username,
             s.id AS subscription_id, s.ends_at AS subscription_ends_at,
             s.id IS NOT NULL AND now() >= s.starts_at AND now() < s.ends_at AS subscription_active
@@ -27,6 +27,55 @@ export async function findForUpdate({ instituteId, name, phoneNo }, db = default
       FOR UPDATE`,
     [instituteId, phoneNo, name]);
   return rows[0] || null;
+}
+
+// ── Pilot (020_pilot_mode.sql) ────────────────────────────────────────────
+// Pilot seats taken on this institute, by the class each seat was taken for
+// (pilot_class): via_pilot rows that have never been on a subscription,
+// linked to a live account. → { 9: n, 10: n }
+export async function pilotSeatsUsed(instituteId, db = defaultDb) {
+  const { rows } = await db.query(
+    `SELECT u.pilot_class, count(*)::int AS n
+       FROM "user" u JOIN user_metadata m ON m.id = u.metadata_id AND NOT m.is_deleted
+      WHERE u.institute_id = $1 AND u.via_pilot AND u.subscription_id IS NULL
+      GROUP BY u.pilot_class`,
+    [instituteId]);
+  const used = { 9: 0, 10: 0 };
+  for (const r of rows) if (r.pilot_class in used) used[r.pilot_class] = r.n;
+  return used;
+}
+
+// Pilot students on this list who have never been on a subscription, with
+// their accounts. After an upload: the ones the file didn't match.
+export async function pilotWithoutSubscription(instituteId, db = defaultDb) {
+  const { rows } = await db.query(
+    `SELECT u.name, u.phone_no, m.id AS student_id, m.username, m.class
+       FROM "user" u JOIN user_metadata m ON m.id = u.metadata_id
+      WHERE u.institute_id = $1 AND u.via_pilot AND u.subscription_id IS NULL
+      ORDER BY lower(u.name), u.phone_no`,
+    [instituteId]);
+  return rows;
+}
+
+// A pilot sign-up's place on the list: registered, no subscription, holding
+// a seat for pilotClass.
+export async function addPilot({ instituteId, name, phoneNo, studentId, pilotClass }, db = defaultDb) {
+  await db.query(
+    `INSERT INTO "user" (institute_id, name, phone_no, status, metadata_id, registered_at, via_pilot, pilot_class)
+     VALUES ($1, $2, $3, 'registered', $4, now(), true, $5)`,
+    [instituteId, name, phoneNo, studentId, pilotClass]);
+}
+
+// Is this person on another school's list (deleted schools too, registered
+// or not)? By account (studentId, may be null) or by name + phone.
+export async function onOtherSchool({ instituteId, studentId, name, phoneNo }, db = defaultDb) {
+  const { rows } = await db.query(
+    `SELECT 1 FROM "user" u JOIN institute i ON i.id = u.institute_id AND i.type = 'school'
+      WHERE u.institute_id <> $1
+        AND (u.metadata_id = $2 OR (u.phone_no = $3 AND lower(u.name) = lower($4)))
+      LIMIT 1`,
+    [instituteId, studentId ?? null, phoneNo, name]);
+  return rows.length > 0;
 }
 
 // Links the row to an account. false when someone else linked it first.
@@ -99,15 +148,19 @@ export async function forAccount(studentId, db = defaultDb) {
   return rows;
 }
 
-// How many of these rows are on a subscription covering now. A renewal that
-// starts later must not move them yet: they'd lose access until it starts.
+// How many of these rows have access through this list now: a subscription
+// covering now, or a pilot place while the pilot is live (moving a pilot
+// student onto a subscription ends their pilot access for good). A renewal
+// that starts later must not move them yet: they'd lose access until it starts.
 export async function countCoveredNow(instituteId, entries, db = defaultDb) {
   const { rows } = await db.query(
     `SELECT count(*)::int AS n
        FROM unnest($2::text[], $3::text[]) AS e (name, phone_no)
        JOIN "user" u ON u.institute_id = $1 AND u.phone_no = e.phone_no AND lower(u.name) = lower(e.name)
-       JOIN subscription s ON s.id = u.subscription_id
-      WHERE now() >= s.starts_at AND now() < s.ends_at`,
+       JOIN institute i ON i.id = u.institute_id
+       LEFT JOIN subscription s ON s.id = u.subscription_id
+      WHERE (now() >= s.starts_at AND now() < s.ends_at)
+         OR (u.via_pilot AND u.subscription_id IS NULL AND i.pilot_mode AND now() < i.pilot_ends_at)`,
     [instituteId, entries.map(e => e.name), entries.map(e => e.phoneNo)]);
   return rows[0].n;
 }

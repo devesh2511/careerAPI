@@ -126,6 +126,15 @@ paths:
         creates (or links) the account with a join request instead of a list
         place. The account has no access (`pending_approval`) until an admin
         approves the request.
+
+        An institute with a live pilot (`pilot_mode`) takes them too: then
+        `pilot` is true, and finishing either step puts them on the list as a
+        pilot student with access straight away. If their class's pilot seats
+        are full, an institute with `accepts_requests` falls back to a join
+        request; otherwise it's `409 pilot_full` (here only when both classes
+        are full, since the class isn't known yet for a new account). A
+        school's pilot refuses anyone already on another school's list
+        (`409 already_at_school`).
       security: []
       requestBody:
         required: true
@@ -141,12 +150,13 @@ paths:
                 type: object
                 properties:
                   status: { type: string, enum: [new, existing_account] }
-                  username: { type: string, description: 'Only with `existing_account`, and not with `needs_approval` (anyone with an open institute''s ID could look it up)' }
+                  username: { type: string, description: 'Only with `existing_account`, and not with `needs_approval` or `pilot` (anyone with an open institute''s ID could look it up)' }
                   needs_approval: { type: boolean, description: 'Not on the list: finishing leaves a join request for an admin to approve' }
+                  pilot: { type: boolean, description: 'Not on the list: finishing takes a pilot seat, with access straight away' }
         '400': { $ref: '#/components/responses/Invalid' }
         '403': { description: '`account_disabled`: their account was switched off by an admin', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '404': { description: '`not_on_list`: no such name + phone on that (active) institute''s list', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '409': { description: '`already_registered`: this list row already has an account. `request_pending`: this account has already asked to join this institute', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: '`already_registered`: this list row already has an account. `request_pending`: this account has already asked to join this institute. `pilot_full`: no pilot seats left (for their class, when they have an account; else for either class). `already_at_school`: a school''s pilot, and they''re on another school''s list', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /auth/register:
     post:
@@ -185,7 +195,7 @@ paths:
         '400': { $ref: '#/components/responses/Invalid' }
         '404': { description: '`not_on_list`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '409':
-          description: '`username_taken`, `already_registered` or `account_exists` (use `/auth/register/link`)'
+          description: '`username_taken`, `already_registered`, `account_exists` (use `/auth/register/link`), `pilot_full` (no pilot seats left for the chosen class; `field: class`) or `already_at_school`'
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -224,7 +234,7 @@ paths:
         '401': { description: '`bad_credentials`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '403': { description: '`account_disabled`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '404': { description: '`not_on_list`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '409': { description: '`already_registered`. `request_pending`: this account has already asked to join this institute', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: '`already_registered`. `request_pending`: this account has already asked to join this institute. `pilot_full`: no pilot seats left for their class. `already_at_school`: a school''s pilot, and they''re on another school''s list', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /auth/login:
     post:
@@ -1396,10 +1406,30 @@ paths:
                     type: array
                     description: Linked accounts that are deactivated (still can't log in)
                     items: { type: object, properties: { student_id: { type: integer }, full_name: { type: string }, phone_no: { type: string } } }
+                  pilot_unmatched:
+                    type: array
+                    description: |
+                      Pilot students on this list the file didn't match (still on
+                      no subscription). Not stored: only in this response. Fix a
+                      misspelling by correcting the student's name and phone
+                      (`PATCH /admin/students/{id}/details`), which merges the
+                      uploaded row into theirs.
+                    items:
+                      type: object
+                      properties:
+                        student_id: { type: integer }
+                        username: { type: string }
+                        full_name: { type: string }
+                        phone_no: { type: string }
+                        class: { type: integer }
+                        suggestions:
+                          type: array
+                          description: Rows in the file with the same phone and a different name
+                          items: { type: object, properties: { full_name: { type: string }, phone_no: { type: string } } }
         '400': { description: '`invalid` (query), `bad_file`, `empty_file` or `too_many_rows`', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '401': { $ref: '#/components/responses/Unauthenticated' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { description: '`institute_deleted`; `renewal_too_early`: a renewal starting later while students in the file are still on a current subscription (moving them now would cut them off); or `school_move_too_early`: the same, for students on another school''s current subscription', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: '`institute_deleted`; `renewal_too_early`: a subscription starting later while students in the file are still on a current subscription or a live pilot (moving them now would cut them off); or `school_move_too_early`: the same, for students on another school''s current subscription', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '422':
           description: '`invalid_rows` or `headcount_exceeded`; nothing was added'
           content:
@@ -2409,6 +2439,19 @@ components:
         contact_details: { type: [string, 'null'], maxLength: 255 }
         status: { type: string, enum: [active, suspended], default: active }
         accepts_requests: { type: boolean, default: false, description: 'Students not on its list may register and ask to join; an admin approves each. Left out on update: unchanged' }
+        pilot_mode:
+          type: boolean
+          default: false
+          description: |
+            Free pilot before the institute pays. While it's live (on, before
+            `pilot_ends_at`, institute active), students not on its list
+            register with the institute ID and get access straight away, up to
+            the seat limit for their class. Set false to stop it at once. One
+            pilot per institute: turning it on again continues the same pilot.
+            Left out on update: unchanged.
+        pilot_ends_at: { type: string, format: date-time, description: 'When pilot access and sign-ups end. Required while `pilot_mode` is on; must be in the future when turning the pilot on or changing this. Left out on update: unchanged' }
+        pilot_seats_class9: { type: integer, minimum: 0, maximum: 1000, default: 5, description: 'Pilot seats for class 9. Left out on update: unchanged' }
+        pilot_seats_class10: { type: integer, minimum: 0, maximum: 1000, default: 5, description: 'Pilot seats for class 10. Left out on update: unchanged' }
 
     JoinRequest:
       type: object
@@ -2441,6 +2484,18 @@ components:
             list_count: { type: integer, description: Students on its list }
             registered_count: { type: integer, description: Of those, how many have registered }
             pending_count: { type: integer, description: Join requests waiting for approval }
+            pilot:
+              type: object
+              properties:
+                mode: { type: boolean, description: The admin's toggle }
+                live: { type: boolean, description: 'On, before its end time, and the institute is active and not deleted' }
+                ends_at: { type: [string, 'null'], format: date-time }
+                seats:
+                  type: object
+                  description: '`used`: pilot students who have never been on a subscription'
+                  properties:
+                    class9: { type: object, properties: { limit: { type: integer }, used: { type: integer } } }
+                    class10: { type: object, properties: { limit: { type: integer }, used: { type: integer } } }
             subscription:
               description: The current subscription, else the latest one, else null
               oneOf:
@@ -2463,6 +2518,7 @@ components:
         status: { type: string, enum: [unregistered, registered] }
         registered_at: { type: [string, 'null'], format: date-time }
         created_at: { type: string, format: date-time }
+        via_pilot: { type: boolean, description: Added by a pilot sign-up rather than an upload }
         student: { oneOf: [{ type: object, properties: { id: { type: integer }, username: { type: string } } }, { type: 'null' }] }
         subscription:
           oneOf:

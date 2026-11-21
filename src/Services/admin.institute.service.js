@@ -46,8 +46,26 @@ export async function get(instituteId) {
   return new InstituteDTO(row);
 }
 
+// The pilot settings after this save (020_pilot_mode.sql): a pilot that's on
+// needs an end time, and an end time in the past is refused when turning the
+// pilot on or moving its end. Saving other fields of a pilot that has
+// already run out is fine. current: the institute before the save (null on
+// create).
+function guardPilot(req, current) {
+  const wasOn = Boolean(current && current.pilot_mode);
+  if (!(req.pilot_mode ?? wasOn)) return;
+  const currentEnd = current && current.pilot_ends_at ? new Date(current.pilot_ends_at) : null;
+  const end = req.pilot_ends_at ?? currentEnd;
+  if (!end) throw ApiError.invalid('Pick when the pilot ends.', 'pilot_ends_at');
+  const moved = Boolean(req.pilot_ends_at) && (!currentEnd || req.pilot_ends_at.getTime() !== currentEnd.getTime());
+  if ((!wasOn || moved) && end.getTime() <= Date.now()) {
+    throw ApiError.invalid('The pilot must end in the future.', 'pilot_ends_at');
+  }
+}
+
 // req: InstituteRequest.
 export async function create(req, adminId) {
+  guardPilot(req, null);
   return get(await guardUnique(() => institutes.insert(req, adminId)));
 }
 
@@ -62,6 +80,7 @@ export async function update(instituteId, req) {
         'and a student can only be on one school. Remove them from one of the lists first.', 'type');
     }
   }
+  if (current) guardPilot(req, current);
   const ok = await guardUnique(() => withTransaction(db => institutes.update(instituteId, req, db)));
   if (!ok) throw ApiError.notFound('institute');
   return get(instituteId);
@@ -95,6 +114,7 @@ export async function listStudents(instituteId) {
     status: r.status,
     registered_at: r.registered_at,
     created_at: r.created_at,
+    via_pilot: r.via_pilot,
     student: r.student_id ? { id: r.student_id, username: r.username } : null,
     subscription: r.subscription_id
       ? { id: r.subscription_id, active: r.subscription_active, ends_at: r.subscription_ends_at }
@@ -132,8 +152,8 @@ export async function uploadStudents(instituteId, buf, q, adminId) {
       const covered = await studentList.countCoveredNow(instituteId, m.entries, db);
       if (covered) {
         throw new ApiError(409, 'renewal_too_early',
-          `${covered} student${covered === 1 ? ' in this file is' : 's in this file are'} still on a current subscription, ` +
-          'so a renewal that starts later would cut them off until then. Upload it once the current one ends, ' +
+          `${covered} student${covered === 1 ? ' in this file is' : 's in this file are'} still on a current subscription or the pilot, ` +
+          'so a subscription that starts later would cut them off until then. Upload it once the current one (or the pilot) ends, ' +
           'or start it today. Nothing was added.', 'starts_at');
       }
     }
@@ -159,6 +179,7 @@ export async function uploadStudents(instituteId, buf, q, adminId) {
     const to = { institute_id: institute.id, institute_name: institute.name, institute_code: institute.institute_code };
     for (const r of others) if (r.metadata_id) await logMove(r.metadata_id, r, to, { adminId, via: 'upload' }, db);
     await refreshInstitutes([...new Set([...linked, ...others.map(r => r.metadata_id).filter(Boolean)])], db);
+    const pilotUnmatched = pilotNotInFile(await studentList.pilotWithoutSubscription(instituteId, db), m.entries);
 
     return {
       subscription: new SubscriptionDTO({ ...sub, students: m.entries.length }),
@@ -171,8 +192,24 @@ export async function uploadStudents(instituteId, buf, q, adminId) {
       matched_by_old_details: m.matchedByOld,
       ambiguous: m.ambiguous,
       deactivated: m.deactivated,
+      pilot_unmatched: pilotUnmatched,
     };
   });
+}
+
+// Pilot students the upload didn't put on the subscription (their row still
+// has none, so the file didn't have their name + phone), each with the file
+// rows that share their phone under another name: likely the same student,
+// spelled the institute's way. Only reported, never stored: the admin fixes
+// a mismatch by correcting the student's name and phone, which merges the
+// uploaded row into theirs.
+function pilotNotInFile(pilotRows, entries) {
+  return pilotRows.map(r => ({
+    student_id: r.student_id, username: r.username, full_name: r.name, phone_no: r.phone_no, class: r.class,
+    suggestions: entries
+      .filter(e => e.phoneNo === r.phone_no && e.name.toLowerCase() !== r.name.toLowerCase())
+      .map(e => ({ full_name: e.name, phone_no: e.phoneNo })),
+  }));
 }
 
 // The uploaded rows matched to existing accounts (studentList.matchAccounts).

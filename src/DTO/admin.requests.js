@@ -238,8 +238,28 @@ export class InstituteRequest {
     // true / 'true' or false / 'false'; left out: unchanged on update, off on create.
     const ar = body.accepts_requests;
     this.accepts_requests = ar === true || ar === 'true' ? true : ar === false || ar === 'false' ? false : undefined;
+    // Pilot (020_pilot_mode.sql). Each left out (or blank): unchanged on
+    // update, the column default on create. The service checks the end time.
+    const pm = body.pilot_mode;
+    this.pilot_mode = pm === true || pm === 'true' ? true : pm === false || pm === 'false' ? false : undefined;
+    const pe = body.pilot_ends_at;
+    if (pe == null || pe === '') this.pilot_ends_at = undefined;
+    else {
+      this.pilot_ends_at = parseDate(pe);
+      if (!this.pilot_ends_at) throw ApiError.invalid('Pick when the pilot ends.', 'pilot_ends_at');
+    }
+    for (const c of [9, 10]) {
+      const key = `pilot_seats_class${c}`, v = body[key];
+      if (v == null || v === '') { this[key] = undefined; continue; }
+      const nSeats = Number(v);
+      if (!Number.isInteger(nSeats) || nSeats < 0 || nSeats > PILOT_SEATS_MAX) {
+        throw ApiError.invalid(`Class ${c} pilot seats must be a whole number from 0 to ${PILOT_SEATS_MAX}.`, key);
+      }
+      this[key] = nSeats;
+    }
   }
 }
+const PILOT_SEATS_MAX = 1000;
 
 // 'YYYY-MM-DD' or a full ISO time → Date, else null.
 function parseDate(v) {

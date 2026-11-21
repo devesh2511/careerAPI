@@ -91,19 +91,29 @@ export async function refreshInstitutes(studentIds, db = defaultDb) {
 
 // For the access check: the institute the account shows, and the latest-
 // ending subscription covering now on any list the student is on (from a
-// live, active institute).
+// live, active institute). Without one, a pilot place counts as the plan
+// (020_pilot_mode.sql): a via_pilot row that has never been on a
+// subscription, on an institute whose pilot is live, until the pilot ends.
 // pending: the institute they've asked to join (join_requests), if any.
 // on_list: on at least one live institute's list (else they're on none).
 // Selected alongside user_metadata m LEFT JOIN institute i (ACCESS_FROM).
 const ACCESS_FACTS = `
             i.name AS institute_name, i.type AS institute_type,
-            (SELECT row_to_json(x) FROM (
-               SELECT s.ends_at, li.name, li.institute_code
-                 FROM "user" u
-                 JOIN subscription s ON s.id = u.subscription_id
-                 JOIN institute li ON li.id = u.institute_id AND li.status = 'active' AND NOT li.is_deleted
-                WHERE u.metadata_id = m.id AND now() >= s.starts_at AND now() < s.ends_at
-                ORDER BY s.ends_at DESC LIMIT 1) x) AS plan,
+            coalesce(
+              (SELECT row_to_json(x) FROM (
+                 SELECT s.ends_at, li.name, li.institute_code
+                   FROM "user" u
+                   JOIN subscription s ON s.id = u.subscription_id
+                   JOIN institute li ON li.id = u.institute_id AND li.status = 'active' AND NOT li.is_deleted
+                  WHERE u.metadata_id = m.id AND now() >= s.starts_at AND now() < s.ends_at
+                  ORDER BY s.ends_at DESC LIMIT 1) x),
+              (SELECT row_to_json(x) FROM (
+                 SELECT pi.pilot_ends_at AS ends_at, pi.name, pi.institute_code
+                   FROM "user" u
+                   JOIN institute pi ON pi.id = u.institute_id AND pi.status = 'active' AND NOT pi.is_deleted
+                                    AND pi.pilot_mode AND now() < pi.pilot_ends_at
+                  WHERE u.metadata_id = m.id AND u.via_pilot AND u.subscription_id IS NULL
+                  ORDER BY pi.pilot_ends_at DESC LIMIT 1) x)) AS plan,
             (SELECT row_to_json(x) FROM (
                SELECT ri.name, ri.institute_code
                  FROM join_requests r
